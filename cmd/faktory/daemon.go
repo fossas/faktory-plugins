@@ -9,12 +9,13 @@ import (
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/util"
 	"github.com/contribsys/faktory/webui"
+	"github.com/fossas/faktory-plugins/uniq"
 )
 
 func logPreamble() {
 	log.SetFlags(0)
 	log.Println(client.Name, client.Version)
-	log.Println(fmt.Sprintf("Copyright © %d Contributed Systems LLC", time.Now().Year()))
+	log.Println(fmt.Sprintf("Copyright © %d Contributed Systems LLC and FOSSA Inc", time.Now().Year()))
 	log.Println("Licensed under the GNU Affero Public License 3.0")
 }
 
@@ -42,6 +43,8 @@ func main() {
 	}
 
 	s.Register(webui.Subsystem(opts.WebBinding))
+	// fossa plugins
+	s.Register(new(uniq.UniqSubsystem))
 
 	go cli.HandleSignals(s)
 	go func() {
