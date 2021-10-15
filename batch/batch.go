@@ -90,9 +90,11 @@ func (b *Batch) init() error {
 	return nil
 }
 
-func (b *Batch) commit() {
+func (b *Batch) commit() error {
 	b.mu.Lock()
-	b.updateCommited(true)
+	if err := b.updateCommited(true); err != nil {
+		return fmt.Errorf("commit: %v", err)
+	}
 	b.mu.Unlock()
 }
 
@@ -102,20 +104,28 @@ func (b *Batch) open() error {
 	if b.isBatchDone() {
 		return errors.New("Batch job has already finished, cannot open a new batch")
 	}
-	b.updateCommited(false)
+	if err := b.updateCommited(false); err != nil {
+		return fmt.Errorf("open: %v", err)
+	}
 	return nil
 }
 
-func (b *Batch) jobQueued(jobId string) {
+func (b *Batch) jobQueued(jobId string) error {
 	b.mu.Lock()
-	b.addJobToBatch(jobId)
+	if err := b.addJobToBatch(jobId); err != nil {
+		return fmt.Errorf("add job to batch: %v", err)
+	}
 	b.mu.Unlock()
+	return nil
 }
 
-func (b *Batch) jobFinished(jobId string, success bool) {
+func (b *Batch) jobFinished(jobId string, success bool) error {
 	b.mu.Lock()
-	b.removeJobFromBatch(jobId, success)
+	if err := b.removeJobFromBatch(jobId, success); err != nil {
+		return fmt.Errorf("job finished: %v", err)
+	}
 	b.mu.Unlock()
+	return nil
 }
 
 func (b *Batch) setWorkerForJid(jid string, wid string) {
@@ -139,28 +149,41 @@ func (b *Batch) hasWorker(wid string) bool {
 	return false
 }
 
-func (b *Batch) remove() {
+func (b *Batch) remove() error {
 	b.mu.Lock()
-	b.rclient.HDel(b.MetaKey)
+	if err := b.rclient.HDel(b.MetaKey).Err(); err != nil {
+		return fmt.Errorf("remove batch data: %v", err)
+	}
 	b.mu.Unlock()
+	return nil
 }
 
-func (b *Batch) updateCommited(commited bool) {
+func (b *Batch) updateCommited(commited bool) error {
 	b.Meta.Committed = commited
-	b.rclient.HSet(b.MetaKey, "commited", commited)
+	if err := b.rclient.HSet(b.MetaKey, "commited", commited).Err(); err != nil {
+		return fmt.Errorf("%v", err)
+	}
 	if commited {
 		b.checkBatchDone()
 	}
+	return nil
 }
 
-func (b *Batch) addJobToBatch(jobId string) {
-	b.rclient.SAdd(b.JobsKey, jobId)
-	b.rclient.HIncrBy(b.MetaKey, "total", 1)
+func (b *Batch) addJobToBatch(jobId string) error {
+	if err := b.rclient.SAdd(b.JobsKey, jobId).Err(); err != nil {
+		return fmt.Errorf("add job to batch: %v", err)
+	}
+	if err := b.rclient.HIncrBy(b.MetaKey, "total", 1); err != nil {
+		return fmt.Errorf("increase job total: %v", err)
+	}
 	b.Meta.Total += 1
+	return nil
 }
 
-func (b *Batch) removeJobFromBatch(jobId string, success bool) {
-	b.rclient.SRem(b.JobsKey, jobId)
+func (b *Batch) removeJobFromBatch(jobId string, success bool) error {
+	if err := b.rclient.SRem(b.JobsKey, jobId); err != nil {
+		return fmt.Errorf("remove job from batch: %v", err)
+	}
 	if success {
 		b.Meta.Succeeded += 1
 		b.rclient.HIncrBy(b.MetaKey, "succeeded", 1)
@@ -169,6 +192,7 @@ func (b *Batch) removeJobFromBatch(jobId string, success bool) {
 		b.rclient.HIncrBy(b.MetaKey, "failed", 1)
 	}
 	b.checkBatchDone()
+	return nil
 }
 
 func (b *Batch) isBatchDone() bool {
@@ -182,7 +206,6 @@ func (b *Batch) checkBatchDone() {
 		if b.Meta.Succeeded == b.Meta.Total && b.Meta.SuccessJob != "" {
 			b.queueBatchDoneJob(b.Meta.SuccessJob, "success")
 		}
-
 		if b.Meta.CompleteJob != "" {
 			b.queueBatchDoneJob(b.Meta.CompleteJob, "complete")
 
@@ -193,13 +216,13 @@ func (b *Batch) checkBatchDone() {
 func (b *Batch) queueBatchDoneJob(jobData string, jobType string) {
 	var job client.Job
 	if err := json.Unmarshal([]byte(jobData), &job); err != nil {
-		util.Warnf("Cannot unmarshal complete job %w", err)
+		util.Warnf("unmarshal job(%s): %v", jobType, err)
 		return
 	}
 	job.Jid = fmt.Sprintf("%s-%s", b.Id, jobType)
 	if err := b.Server.Manager().Push(&job); err != nil {
-		util.Warnf("Cannot push job %w", err)
+		util.Warnf("cannot push job(%s) %v", jobType, err)
 		return
 	}
-	util.Infof("Pushed job %+v", job)
+	util.Infof("Pushed %s job (jid: %s)", jobType, job.Jid)
 }
