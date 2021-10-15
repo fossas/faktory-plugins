@@ -132,6 +132,7 @@ func (u *UniqSubsystem) releaseLockMiddleware(releaseAt string) func(next func()
 			if err != nil {
 				util.Info(fmt.Sprintf("Unable to release lock %s", key))
 			}
+			// if released is less than 0 then the lock has already expired
 			if released > 0 {
 				util.Info(fmt.Sprintf("Releasing lock (at=%s) %s", releaseAt, key))
 			}
