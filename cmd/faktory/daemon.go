@@ -44,7 +44,7 @@ func main() {
 
 	s.Register(webui.Subsystem(opts.WebBinding))
 	// fossa plugins
-	s.Register(uniq.Subsystem())
+	s.Register(new(uniq.UniqSubsystem))
 
 	go cli.HandleSignals(s)
 	go func() {

@@ -38,7 +38,7 @@ func TestUniq(t *testing.T) {
 		panic(err)
 	}
 
-	s.Register(Subsystem())
+	s.Register(new(UniqSubsystem))
 
 	go func() {
 		err := s.Run()

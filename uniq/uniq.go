@@ -13,51 +13,43 @@ import (
 	"github.com/contribsys/faktory/util"
 )
 
-type Uniq struct {
+// The UniqSubsytem generates a lock using redis to ensure jobs from the same queue, params and name
+// are not queued more than once
+// it follows the spec found at: https://github.com/contribsys/faktory/wiki/Ent-Unique-Jobs
+type UniqSubsystem struct {
 	Server *server.Server
 }
 
-type Lifecycle struct {
-	Uniq *Uniq
-}
-
-func Subsystem() *Lifecycle {
-	return &Lifecycle{}
-}
-
-func (l *Lifecycle) Start(s *server.Server) error {
-	uniq := newUniq(s)
-	l.Uniq = uniq
-	l.Uniq.AddMiddleware()
-	util.Info("Uniq subsystem started")
+// starts the subsystem and adds the needed middleware
+func (u *UniqSubsystem) Start(s *server.Server) error {
+	u.Server = s
+	u.addMiddleware()
+	util.Info("Unique subsystem started")
 	return nil
 }
 
-func (l *Lifecycle) Name() string {
+// returns the name of the subsystem or plugin
+func (u *UniqSubsystem) Name() string {
 	return "Uniq"
 }
 
-func (l *Lifecycle) Reload(s *server.Server) error {
+// reload - nothing needs to be done but the function must exist for subsystems
+func (u *UniqSubsystem) Reload(s *server.Server) error {
 	return nil
 }
 
-func (l *Lifecycle) Shutdown(s *server.Server) error {
+// shutdown - nothing needs to be done but the function must exist for subsystems
+func (u *UniqSubsystem) Shutdown(s *server.Server) error {
 	return nil
 }
 
-func newUniq(s *server.Server) *Uniq {
-	return &Uniq{
-		Server: s,
-	}
+func (u *UniqSubsystem) addMiddleware() {
+	u.Server.Manager().AddMiddleware("push", u.lockMiddleware)
+	u.Server.Manager().AddMiddleware("fetch", u.releaseLockMiddleware(string(client.UntilStart)))
+	u.Server.Manager().AddMiddleware("ack", u.releaseLockMiddleware(string(client.UntilSuccess)))
 }
 
-func (u *Uniq) AddMiddleware() {
-	u.Server.Manager().AddMiddleware("push", u.LockMiddleware)
-	u.Server.Manager().AddMiddleware("fetch", u.ReleaseLockMiddleware(string(client.UntilStart)))
-	u.Server.Manager().AddMiddleware("ack", u.ReleaseLockMiddleware(string(client.UntilSuccess)))
-}
-
-func (u *Uniq) LockMiddleware(next func() error, ctx manager.Context) error {
+func (u *UniqSubsystem) lockMiddleware(next func() error, ctx manager.Context) error {
 	var uniqueFor float64
 	uniqueForValue, ok := ctx.Job().GetCustom("unique_for")
 	if !ok {
@@ -83,7 +75,7 @@ func (u *Uniq) LockMiddleware(next func() error, ctx manager.Context) error {
 
 	key, err := u.generateKey(ctx.Job())
 	if err != nil {
-		return fmt.Errorf("Unable to generate key %w", err)
+		return fmt.Errorf("generate key: %v", err)
 	}
 
 	lockTime := time.Duration(uniqueFor) * time.Second
@@ -110,14 +102,11 @@ func (u *Uniq) LockMiddleware(next func() error, ctx manager.Context) error {
 	return next()
 }
 
-func (u *Uniq) ReleaseLockMiddleware(releaseAt string) func(next func() error, ctx manager.Context) error {
+func (u *UniqSubsystem) releaseLockMiddleware(releaseAt string) func(next func() error, ctx manager.Context) error {
 	return func(next func() error, ctx manager.Context) error {
-		_, ok := ctx.Job().GetCustom("unique_for")
-		if !ok {
+		if _, ok := ctx.Job().GetCustom("unique_for"); !ok {
 			return next()
 		}
-
-		var uniqueUntil string
 
 		uniqueUntilValue, ok := ctx.Job().GetCustom("unique_until")
 
@@ -128,13 +117,21 @@ func (u *Uniq) ReleaseLockMiddleware(releaseAt string) func(next func() error, c
 		key, err := u.generateKey(ctx.Job())
 
 		if err != nil {
-			return fmt.Errorf("Unable to generate key %w", err)
+			return fmt.Errorf("generate key: %v", err)
 		}
 
-		uniqueUntil = uniqueUntilValue.(string)
+		uniqueUntil, ok := uniqueUntilValue.(string)
+		if !ok {
+			return manager.Halt("ERR", "invalid value for unique_until.")
+		}
 
 		if uniqueUntil == releaseAt {
-			released, _ := u.Server.Manager().Redis().Unlink(key).Result()
+			released, err := u.Server.Manager().Redis().Unlink(key).Result()
+			// we can ignore the error since all unique keys have an expiration
+			// the worst case is we are unable to queue up another job with the same parameters
+			if err != nil {
+				util.Info(fmt.Sprintf("Unable to release lock %s", key))
+			}
 			if released > 0 {
 				util.Info(fmt.Sprintf("Releasing lock (at=%s) %s", releaseAt, key))
 			}
@@ -144,17 +141,16 @@ func (u *Uniq) ReleaseLockMiddleware(releaseAt string) func(next func() error, c
 	}
 }
 
-func (u *Uniq) generateKey(job *client.Job) (string, error) {
+func (u *UniqSubsystem) generateKey(job *client.Job) (string, error) {
 	data, err := json.Marshal(job.Args)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("marshal job args to JSON: %v", err)
 	}
-	keyString := fmt.Sprintf("%s-%s-%s", job.Queue, job.Type, string(data))
 	h := sha256.New()
-	_, err = h.Write([]byte(keyString))
-	if err != nil {
-		return "", err
+	if _, err := fmt.Fprintf(h, "%s-%s-%s", job.Queue, job.Type, string(data)); err != nil {
+		return "", fmt.Errorf("write key to hasher: %v", err)
 	}
+
 	key := hex.EncodeToString(h.Sum(nil))
 	return key, nil
 }
