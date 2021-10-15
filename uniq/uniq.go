@@ -125,6 +125,7 @@ func (u *UniqSubsystem) releaseLockMiddleware(releaseAt string) func(next func()
 			// "success" is the default value
 			// instead of throwing an error we can assume the default
 			uniqueUntil = string(client.UntilSuccess)
+			util.Info("unable to convert unique_until to a string, using default value for 'unique_until'")
 		}
 
 		if uniqueUntil == releaseAt {
