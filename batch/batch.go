@@ -91,7 +91,6 @@ func (b *batch) init() error {
 		return fmt.Errorf("failed converting string to bool: %v", err)
 	}
 	b.Meta.Description = meta["description"]
-	b.Meta.ParentBid = meta["parent_bid"]
 	b.Meta.CreatedAt = meta["created_at"]
 	b.Meta.SuccessJob = meta["success_job"]
 	b.Meta.CompleteJob = meta["complete_job"]
