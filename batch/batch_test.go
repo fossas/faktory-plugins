@@ -280,18 +280,16 @@ func TestBatchLoadBatches(t *testing.T) {
 }
 
 func withServer(batchSystem *BatchSubsystem, runner func(cl *client.Client)) {
-	dir := "/tmp/system.db"
+	dir := "/tmp/batching_system.db"
 	defer os.RemoveAll(dir)
-	opts := &cli.CliOptions{"localhost:7419", "localhost:7420", "development", ".", "debug", dir}
+	opts := &cli.CliOptions{"localhost:7418", "localhost:7420", "development", ".", "debug", dir}
 	s, stopper, err := cli.BuildServer(opts)
 
-	defer s.Stop(nil)
-	if stopper != nil {
-		defer stopper()
-	}
 	if err != nil {
 		panic(err)
 	}
+	defer stopper()
+	defer s.Stop(nil)
 
 	go cli.HandleSignals(s)
 
@@ -322,7 +320,9 @@ func getClient() (*client.Client, error) {
 	// this is a worker process so we need to set the global WID before connecting
 	client.RandomProcessWid = strconv.FormatInt(rand.Int63(), 32)
 
-	cl, err := client.Dial(client.DefaultServer(), "123456")
+	srv := client.DefaultServer()
+	srv.Address = "localhost:7418"
+	cl, err := client.Dial(srv, "123456")
 	if err != nil {
 		return nil, err
 	}

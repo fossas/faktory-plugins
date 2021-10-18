@@ -19,17 +19,16 @@ func TestUniq(t *testing.T) {
 	opts := cli.ParseArguments()
 	util.InitLogger("info")
 
-	dir := "/tmp/system.db"
+	dir := "/tmp/uniq_system.db"
 	defer os.RemoveAll(dir)
 	opts.ConfigDirectory = "."
 	opts.StorageDirectory = dir
 	s, stopper, err := cli.BuildServer(&opts)
-	if stopper != nil {
-		defer stopper()
-	}
+
 	if err != nil {
 		panic(err)
 	}
+	defer stopper()
 
 	go cli.HandleSignals(s)
 
