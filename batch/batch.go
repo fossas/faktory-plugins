@@ -14,17 +14,15 @@ import (
 )
 
 type batch struct {
-	Id          string
-	BatchKey    string
-	JobsKey     string
-	ChildrenKey string
-	MetaKey     string
-	Children    map[string]*batch
-	Meta        *batchMeta
-	rclient     *redis.Client
-	mu          sync.Mutex
-	Workers     map[string]string
-	Server      *server.Server
+	Id       string
+	BatchKey string
+	JobsKey  string
+	MetaKey  string
+	Meta     *batchMeta
+	rclient  *redis.Client
+	mu       sync.Mutex
+	Workers  map[string]string
+	Server   *server.Server
 }
 
 const (
