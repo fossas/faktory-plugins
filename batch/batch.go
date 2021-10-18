@@ -27,8 +27,16 @@ type batch struct {
 	Server      *server.Server
 }
 
+const (
+	// no status
+	CallbackJobPending = ""
+	// callback job has been queued
+	CallbackJobQueued = "1"
+	// callback job has succeeded
+	CallbackJobSucceeded = "2"
+)
+
 type batchMeta struct {
-	ParentBid        string
 	Total            int
 	Failed           int
 	Succeeded        int
@@ -56,7 +64,6 @@ func (b *batch) init() error {
 			"created_at":   b.Meta.CreatedAt,
 			"description":  b.Meta.Description,
 			"committed":    b.Meta.Committed,
-			"parent_bid":   b.Meta.ParentBid,
 			"success_job":  b.Meta.SuccessJob,
 			"complete_job": b.Meta.CompleteJob,
 			"success_st":   b.Meta.SuccessJobState,
@@ -135,7 +142,7 @@ func (b *batch) jobFinished(jobId string, success bool) error {
 
 func (b *batch) callbackJobSucceded(callbackType string) error {
 	b.mu.Lock()
-	if err := b.updateJobCallbackState(callbackType, "2"); err != nil {
+	if err := b.updateJobCallbackState(callbackType, CallbackJobSucceeded); err != nil {
 		return fmt.Errorf("update callback job state: %v", err)
 	}
 	b.mu.Unlock()
@@ -256,6 +263,8 @@ func (b *batch) queueBatchDoneJob(jobData string, callbackType string) {
 		util.Warnf("cannot push job(%s) %v", callbackType, err)
 		return
 	}
-	b.updateJobCallbackState(callbackType, "1")
+	if err := b.updateJobCallbackState(callbackType, CallbackJobQueued); err != nil {
+		util.Warnf("Could not update job callback state: %v", err)
+	}
 	util.Infof("Pushed %s job (jid: %s)", callbackType, job.Jid)
 }

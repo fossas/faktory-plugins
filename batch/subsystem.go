@@ -350,8 +350,8 @@ func (b *BatchSubsystem) newBatchMeta(description string, success string, comple
 		Description:      description,
 		SuccessJob:       success,
 		CompleteJob:      complete,
-		SuccessJobState:  "",
-		CompleteJobState: "",
+		SuccessJobState:  CallbackJobPending,
+		CompleteJobState: CallbackJobPending,
 	}
 }
 
