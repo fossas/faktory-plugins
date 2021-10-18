@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/server"
@@ -48,9 +49,19 @@ type batchMeta struct {
 }
 
 func (b *batch) init() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	meta, err := b.rclient.HGetAll(b.MetaKey).Result()
 	if err != nil {
 		return nil
+	}
+
+	if err := b.Server.Manager().Redis().SAdd("batches", b.Id).Err(); err != nil {
+		return fmt.Errorf("newBatch store batch: %v", err)
+	}
+
+	if err := b.Server.Manager().Redis().SetNX(b.BatchKey, b.Id, time.Duration(2*time.Hour)).Err(); err != nil {
+		return fmt.Errorf("newBatch expiration: %v", err)
 	}
 
 	if len(meta) == 0 {
@@ -169,8 +180,11 @@ func (b *batch) hasWorker(wid string) bool {
 
 func (b *batch) remove() error {
 	b.mu.Lock()
-	if err := b.rclient.HDel(b.MetaKey).Err(); err != nil {
-		return fmt.Errorf("remove batch data: %v", err)
+	if err := b.rclient.Del(b.MetaKey).Err(); err != nil {
+		return fmt.Errorf("remove batch: %s %v", b.Id, err)
+	}
+	if err := b.Server.Manager().Redis().SRem("batches", b.Id).Err(); err != nil {
+		return fmt.Errorf("remove batch: %s, %v", b.Id, err)
 	}
 	b.mu.Unlock()
 	return nil
@@ -179,10 +193,18 @@ func (b *batch) remove() error {
 func (b *batch) updateCommited(commited bool) error {
 	b.Meta.Committed = commited
 	if err := b.rclient.HSet(b.MetaKey, "commited", commited).Err(); err != nil {
-		return fmt.Errorf("%v", err)
+		return fmt.Errorf("updateCommited set commited: %v", err)
 	}
 	if commited {
+		// remove expiration as batch has been commited
+		if err := b.Server.Manager().Redis().Persist(b.BatchKey).Err(); err != nil {
+			return fmt.Errorf("updatedCommited set expire: %v", err)
+		}
 		b.checkBatchDone()
+	} else {
+		if err := b.Server.Manager().Redis().Expire(b.BatchKey, time.Duration(2*time.Hour)).Err(); err != nil {
+			return fmt.Errorf("updatedCommited set expire: %v", err)
+		}
 	}
 	return nil
 }

@@ -138,7 +138,7 @@ func (b *BatchSubsystem) addCommands() {
 
 			batch, err := b.getBatch(batchId)
 			if err != nil {
-				_ = c.Error(cmd, fmt.Errorf("Cannot find batch: %v", err))
+				_ = c.Error(cmd, fmt.Errorf("Cannot get batch: %v", err))
 				return
 			}
 
@@ -167,7 +167,7 @@ func (b *BatchSubsystem) addCommands() {
 			}
 			batch, err := b.getBatch(batchId)
 			if err != nil {
-				_ = c.Error(cmd, fmt.Errorf("Cannot find batch: %v", err))
+				_ = c.Error(cmd, fmt.Errorf("Cannot get batch: %v", err))
 				return
 			}
 
@@ -190,8 +190,8 @@ func (b *BatchSubsystem) addCommands() {
 				"pending":      batch.Meta.Total - batch.Meta.Failed - batch.Meta.Succeeded,
 				"description":  batch.Meta.Description,
 				"created_at":   batch.Meta.CreatedAt,
-				"completed_st": "",
-				"success_st":   "",
+				"completed_st": CallbackJobPending,
+				"success_st":   CallbackJobPending,
 			})
 			if err != nil {
 				c.Error(cmd, fmt.Errorf("Unable to marshal batch data: %v", err))
@@ -356,9 +356,6 @@ func (b *BatchSubsystem) newBatchMeta(description string, success string, comple
 }
 
 func (b *BatchSubsystem) newBatch(batchId string, meta *batchMeta) (*batch, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	batch := &batch{
 		Id:       batchId,
 		BatchKey: fmt.Sprintf("batch-%s", batchId),
@@ -373,19 +370,15 @@ func (b *BatchSubsystem) newBatch(batchId string, meta *batchMeta) (*batch, erro
 	if err := batch.init(); err != nil {
 		return nil, fmt.Errorf("initialize batch: %v", err)
 	}
-	if err := b.Server.Manager().Redis().SAdd("batches", batchId).Err(); err != nil {
-		return nil, fmt.Errorf("store batch: %v", err)
-	}
-
-	b.Server.Manager().Redis().SetNX(batch.BatchKey, batch.Id, time.Duration(2*time.Hour))
 
 	b.Batches[batchId] = batch
 
 	return batch, nil
-
 }
 
 func (b *BatchSubsystem) getBatch(batchId string) (*batch, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if batchId == "" {
 		return nil, fmt.Errorf("batchId cannot be blank")
 	}
@@ -396,7 +389,12 @@ func (b *BatchSubsystem) getBatch(batchId string) (*batch, error) {
 		return nil, fmt.Errorf("No batch found")
 	}
 
-	if err := b.Server.Manager().Redis().Get(batch.BatchKey).Err(); err != nil {
+	exists, err := b.Server.Manager().Redis().Exists(batch.BatchKey).Result()
+	if err != nil {
+		util.Warnf("Cannot confirm batch exists: %v", err)
+		return nil, fmt.Errorf("Unable to check if batch has timed out")
+	}
+	if exists == 0 {
 		b.removeBatch(batch)
 		return nil, fmt.Errorf("Batch was not commited within 2 hours")
 	}
@@ -405,10 +403,10 @@ func (b *BatchSubsystem) getBatch(batchId string) (*batch, error) {
 }
 
 func (b *BatchSubsystem) removeBatch(batch *batch) {
-	if err := b.Server.Manager().Redis().SRem("batches", batch.Id).Err(); err != nil {
-		util.Warnf("remove batch: %s, %v", batch.Id, err)
+	if err := batch.remove(); err != nil {
+		util.Warnf("Unable to remove batch: %v", err)
 	}
 	delete(b.Batches, batch.Id)
-	batch.remove()
+
 	batch = nil
 }
