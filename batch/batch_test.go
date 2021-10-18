@@ -2,11 +2,9 @@ package batch
 
 import (
 	"errors"
-	"fmt"
 	"math/rand"
 	"os"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -311,16 +309,6 @@ func withServer(batchSystem *BatchSubsystem, runner func(cl *client.Client)) {
 		}
 	}()
 
-	// client.RandomProcessWid = strconv.FormatInt(rand.Int63(), 32)
-
-	// cl, err := client.Dial(client.DefaultServer(), "123456")
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// defer cl.Close()
-	// if _, err = cl.Beat(); err != nil {
-	// 	panic(err)
-	// }
 	cl, err := getClient()
 	defer cl.Close()
 	if err != nil {
@@ -343,10 +331,6 @@ func getClient() (*client.Client, error) {
 	}
 
 	return cl, nil
-}
-
-func handleError(err error) {
-	fmt.Println(strings.Replace(err.Error(), "\n", "", -1))
 }
 
 func processJob(cl *client.Client, success bool, runner func(job *client.Job)) error {
