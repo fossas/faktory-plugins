@@ -13,34 +13,35 @@ import (
 	"github.com/go-redis/redis"
 )
 
-type Batch struct {
+type batch struct {
 	Id          string
 	BatchKey    string
 	JobsKey     string
 	ChildrenKey string
 	MetaKey     string
-	Children    map[string]*Batch
-	Meta        *BatchMeta
+	Children    map[string]*batch
+	Meta        *batchMeta
 	rclient     *redis.Client
 	mu          sync.Mutex
 	Workers     map[string]string
 	Server      *server.Server
 }
 
-type BatchMeta struct {
-	ParentBid   string
-	Total       int
-	Failed      int
-	Succeeded   int
-	CreatedAt   string
-	Description string
-	Committed   bool
-	SuccessJob  string
-	CompleteJob string
-	CanOpen     bool
+type batchMeta struct {
+	ParentBid        string
+	Total            int
+	Failed           int
+	Succeeded        int
+	CreatedAt        string
+	Description      string
+	Committed        bool
+	SuccessJob       string
+	CompleteJob      string
+	SuccessJobState  string
+	CompleteJobState string
 }
 
-func (b *Batch) init() error {
+func (b *batch) init() error {
 	meta, err := b.rclient.HGetAll(b.MetaKey).Result()
 	if err != nil {
 		return nil
@@ -58,7 +59,8 @@ func (b *Batch) init() error {
 			"parent_bid":   b.Meta.ParentBid,
 			"success_job":  b.Meta.SuccessJob,
 			"complete_job": b.Meta.CompleteJob,
-			"can_open":     b.Meta.CanOpen,
+			"success_st":   b.Meta.SuccessJobState,
+			"complete_st":  b.Meta.CompleteJobState,
 		}
 		b.rclient.HMSet(b.MetaKey, data)
 		return nil
@@ -86,23 +88,26 @@ func (b *Batch) init() error {
 	b.Meta.CreatedAt = meta["created_at"]
 	b.Meta.SuccessJob = meta["success_job"]
 	b.Meta.CompleteJob = meta["complete_job"]
+	b.Meta.SuccessJobState = meta["success_st"]
+	b.Meta.CompleteJobState = meta["complete_st"]
 
 	return nil
 }
 
-func (b *Batch) commit() error {
+func (b *batch) commit() error {
 	b.mu.Lock()
 	if err := b.updateCommited(true); err != nil {
 		return fmt.Errorf("commit: %v", err)
 	}
 	b.mu.Unlock()
+	return nil
 }
 
-func (b *Batch) open() error {
+func (b *batch) open() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.isBatchDone() {
-		return errors.New("Batch job has already finished, cannot open a new batch")
+		return errors.New("batch job has already finished.")
 	}
 	if err := b.updateCommited(false); err != nil {
 		return fmt.Errorf("open: %v", err)
@@ -110,7 +115,7 @@ func (b *Batch) open() error {
 	return nil
 }
 
-func (b *Batch) jobQueued(jobId string) error {
+func (b *batch) jobQueued(jobId string) error {
 	b.mu.Lock()
 	if err := b.addJobToBatch(jobId); err != nil {
 		return fmt.Errorf("add job to batch: %v", err)
@@ -119,7 +124,7 @@ func (b *Batch) jobQueued(jobId string) error {
 	return nil
 }
 
-func (b *Batch) jobFinished(jobId string, success bool) error {
+func (b *batch) jobFinished(jobId string, success bool) error {
 	b.mu.Lock()
 	if err := b.removeJobFromBatch(jobId, success); err != nil {
 		return fmt.Errorf("job finished: %v", err)
@@ -128,19 +133,28 @@ func (b *Batch) jobFinished(jobId string, success bool) error {
 	return nil
 }
 
-func (b *Batch) setWorkerForJid(jid string, wid string) {
+func (b *batch) callbackJobSucceded(callbackType string) error {
+	b.mu.Lock()
+	if err := b.updateJobCallbackState(callbackType, "2"); err != nil {
+		return fmt.Errorf("update callback job state: %v", err)
+	}
+	b.mu.Unlock()
+	return nil
+}
+
+func (b *batch) setWorkerForJid(jid string, wid string) {
 	b.mu.Lock()
 	b.Workers[jid] = wid
 	b.mu.Unlock()
 }
 
-func (b *Batch) removeWorkerForJid(jid string) {
+func (b *batch) removeWorkerForJid(jid string) {
 	b.mu.Lock()
 	delete(b.Workers, jid)
 	b.mu.Unlock()
 }
 
-func (b *Batch) hasWorker(wid string) bool {
+func (b *batch) hasWorker(wid string) bool {
 	for _, worker := range b.Workers {
 		if worker == wid {
 			return true
@@ -149,7 +163,7 @@ func (b *Batch) hasWorker(wid string) bool {
 	return false
 }
 
-func (b *Batch) remove() error {
+func (b *batch) remove() error {
 	b.mu.Lock()
 	if err := b.rclient.HDel(b.MetaKey).Err(); err != nil {
 		return fmt.Errorf("remove batch data: %v", err)
@@ -158,7 +172,7 @@ func (b *Batch) remove() error {
 	return nil
 }
 
-func (b *Batch) updateCommited(commited bool) error {
+func (b *batch) updateCommited(commited bool) error {
 	b.Meta.Committed = commited
 	if err := b.rclient.HSet(b.MetaKey, "commited", commited).Err(); err != nil {
 		return fmt.Errorf("%v", err)
@@ -169,19 +183,34 @@ func (b *Batch) updateCommited(commited bool) error {
 	return nil
 }
 
-func (b *Batch) addJobToBatch(jobId string) error {
+func (b *batch) updateJobCallbackState(callbackType string, state string) error {
+	if callbackType == "success" {
+		b.Meta.SuccessJobState = state
+		if err := b.rclient.HSet(b.MetaKey, "succes_st", state).Err(); err != nil {
+			return err
+		}
+	} else {
+		b.Meta.CompleteJobState = state
+		if err := b.rclient.HSet(b.MetaKey, "completed_st", state).Err(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *batch) addJobToBatch(jobId string) error {
 	if err := b.rclient.SAdd(b.JobsKey, jobId).Err(); err != nil {
 		return fmt.Errorf("add job to batch: %v", err)
 	}
-	if err := b.rclient.HIncrBy(b.MetaKey, "total", 1); err != nil {
+	if err := b.rclient.HIncrBy(b.MetaKey, "total", 1).Err(); err != nil {
 		return fmt.Errorf("increase job total: %v", err)
 	}
 	b.Meta.Total += 1
 	return nil
 }
 
-func (b *Batch) removeJobFromBatch(jobId string, success bool) error {
-	if err := b.rclient.SRem(b.JobsKey, jobId); err != nil {
+func (b *batch) removeJobFromBatch(jobId string, success bool) error {
+	if err := b.rclient.SRem(b.JobsKey, jobId).Err(); err != nil {
 		return fmt.Errorf("remove job from batch: %v", err)
 	}
 	if success {
@@ -195,13 +224,13 @@ func (b *Batch) removeJobFromBatch(jobId string, success bool) error {
 	return nil
 }
 
-func (b *Batch) isBatchDone() bool {
+func (b *batch) isBatchDone() bool {
 	totalFinished := b.Meta.Succeeded + b.Meta.Failed
 	// TODO: check child jobs
 	return b.Meta.Committed == true && totalFinished == b.Meta.Total
 }
 
-func (b *Batch) checkBatchDone() {
+func (b *batch) checkBatchDone() {
 	if b.isBatchDone() {
 		if b.Meta.Succeeded == b.Meta.Total && b.Meta.SuccessJob != "" {
 			b.queueBatchDoneJob(b.Meta.SuccessJob, "success")
@@ -213,16 +242,20 @@ func (b *Batch) checkBatchDone() {
 	}
 }
 
-func (b *Batch) queueBatchDoneJob(jobData string, jobType string) {
+func (b *batch) queueBatchDoneJob(jobData string, callbackType string) {
 	var job client.Job
 	if err := json.Unmarshal([]byte(jobData), &job); err != nil {
-		util.Warnf("unmarshal job(%s): %v", jobType, err)
+		util.Warnf("unmarshal job(%s): %v", callbackType, err)
 		return
 	}
-	job.Jid = fmt.Sprintf("%s-%s", b.Id, jobType)
+	job.Jid = fmt.Sprintf("%s-%s", b.Id, callbackType)
+	// these are required to update the call back job state
+	job.SetCustom("_bid", b.Id)
+	job.SetCustom("_cb", callbackType)
 	if err := b.Server.Manager().Push(&job); err != nil {
-		util.Warnf("cannot push job(%s) %v", jobType, err)
+		util.Warnf("cannot push job(%s) %v", callbackType, err)
 		return
 	}
-	util.Infof("Pushed %s job (jid: %s)", jobType, job.Jid)
+	b.updateJobCallbackState(callbackType, "1")
+	util.Infof("Pushed %s job (jid: %s)", callbackType, job.Jid)
 }

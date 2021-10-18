@@ -17,35 +17,36 @@ import (
 	"github.com/contribsys/faktory/util"
 )
 
-type BatchSubSystem struct {
+// BatchSubsystem this enables jobs to be grouped into a batch
+// the implementation follows the spec here: https://github.com/contribsys/faktory/wiki/Ent-Batches
+// With the exception of child batches, which are not implemented
+// for a client to re-open a batch it must have a WID (worker id) applied to it
+// that worker must be processing a job within the batch
+type BatchSubsystem struct {
 	Server  *server.Server
-	Batches map[string]*Batch
+	Batches map[string]*batch
 	mu      sync.Mutex
 	Fetcher manager.Fetcher
 }
 
-type Lifecycle struct {
-	BatchSubSystem *BatchSubSystem
-}
-
+// structure for a new batch request
+// Succecss and Complete are jobs to be queued
+// once the batch has been commited and all jobs procssed
 type NewBatchRequest struct {
-	ParentBid   string      `json:"parent_bid,omitempty"`
+	//	ParentBid   string      `json:"parent_bid,omitempty"`
 	Description string      `json:"description,omitempty"`
 	Success     *client.Job `json:"success,omitempty"`
 	Complete    *client.Job `json:"complete,omitempty"`
 }
 
-func Subsystem() *Lifecycle {
-	return &Lifecycle{}
-}
-
-func (b *BatchSubSystem) Start(s *server.Server) error {
+// Starts the batch subsystem
+func (b *BatchSubsystem) Start(s *server.Server) error {
 	b.Server = s
 	b.mu = sync.Mutex{}
-	b.Batches = make(map[string]*Batch)
+	b.Batches = make(map[string]*batch)
 	b.Fetcher = manager.BasicFetcher(s.Manager().Redis())
 	if err := b.loadExistingBatches(); err != nil {
-		util.Warnf("loading existing batches: %v", v)
+		util.Warnf("loading existing batches: %v", err)
 	}
 	b.addCommands()
 	b.addMiddleware()
@@ -53,28 +54,36 @@ func (b *BatchSubSystem) Start(s *server.Server) error {
 	return nil
 }
 
-func (b *BatchSubSystem) Name() string {
+// name of the plugin
+func (b *BatchSubsystem) Name() string {
 	return "Batch"
 }
 
-func (b *BatchSubSystem) Reload(s *server.Server) error {
+// Reload does not do anything but is required by Faktory for subsystems
+func (b *BatchSubsystem) Reload(s *server.Server) error {
 	return nil
 }
 
-func (b *BatchSubSystem) Shutdown(s *server.Server) error {
+// Shutdown does not do anything but is required by Faktory for subystems
+func (b *BatchSubsystem) Shutdown(s *server.Server) error {
 	return nil
 }
 
-func (b *BatchSubSystem) addCommands() {
+func (b *BatchSubsystem) addCommands() {
 	server.CommandSet["BATCH"] = func(c *server.Connection, s *server.Server, cmd string) {
 		util.Info(fmt.Sprintf("cmd: %s", cmd))
-		qs := strings.Split(cmd, " ")[1:]
+		parts := strings.SplitN(cmd, " ", 3)[1:]
+		if len(parts) < 2 {
+			c.Error(cmd, errors.New("Invalid BATCH command"))
+			return
+		}
 
-		switch batchOperation := qs[0]; batchOperation {
+		switch batchOperation := parts[0]; batchOperation {
 		case "NEW":
 			var batchRequest NewBatchRequest
-			if err := json.Unmarshal([]byte(qs[1]), &batchRequest); err != nil {
-				c.Error(cmd, fmt.Errorf("Invalid JSON data: %v", err))
+			if err := json.Unmarshal([]byte(parts[1]), &batchRequest); err != nil {
+				_ = c.Error(cmd, fmt.Errorf("Invalid JSON data: %v", err))
+				return
 			}
 
 			batchId := fmt.Sprintf("b-%s", util.RandomJid())
@@ -83,7 +92,8 @@ func (b *BatchSubSystem) addCommands() {
 			if batchRequest.Success != nil {
 				successData, err := json.Marshal(batchRequest.Success)
 				if err != nil {
-					c.Error(cmd, fmt.Errorf("Invalid Success job"))
+					_ = c.Error(cmd, fmt.Errorf("Invalid Success job"))
+					return
 				}
 				success = string(successData)
 			}
@@ -92,12 +102,13 @@ func (b *BatchSubSystem) addCommands() {
 			if batchRequest.Complete != nil {
 				completeData, err := json.Marshal(batchRequest.Complete)
 				if err != nil {
-					c.Error(cmd, fmt.Errorf("Invalid Complete job"))
+					_ = c.Error(cmd, fmt.Errorf("Invalid Complete job"))
+					return
 				}
 				complete = string(completeData)
 			}
 
-			meta := b.newBatchMeta(batchRequest.Description, batchRequest.ParentBid, success, complete)
+			meta := b.newBatchMeta(batchRequest.Description, success, complete)
 			batch, err := b.newBatch(batchId, meta)
 
 			if err != nil {
@@ -105,9 +116,10 @@ func (b *BatchSubSystem) addCommands() {
 				return
 			}
 
-			c.Result([]byte(batch.Id))
+			_ = c.Result([]byte(batch.Id))
+			return
 		case "OPEN":
-			batchId := qs[1]
+			batchId := parts[1]
 
 			// worker ids are usually only associated with workers
 			// in order for a client to submit a job to a batch it must pass wid to the payload when submitting HELO
@@ -120,88 +132,81 @@ func (b *BatchSubSystem) addCommands() {
 
 			wid := client.FieldByName("Wid").String()
 			if wid == "" {
-				c.Error(cmd, fmt.Errorf("Batches can only be opened from a client with wid set"))
+				_ = c.Error(cmd, fmt.Errorf("Batches can only be opened from a client with wid set"))
+				return
 			}
 
 			batch, err := b.getBatch(batchId)
 			if err != nil {
-				c.Error(cmd, fmt.Errorf("Cannot find batch: %v", err))
+				_ = c.Error(cmd, fmt.Errorf("Cannot find batch: %v", err))
+				return
+			}
+
+			if batch.isBatchDone() {
+				_ = c.Error(cmd, errors.New("Batch has already finished"))
+				return
 			}
 
 			if !batch.hasWorker(wid) {
-				c.Error(cmd, fmt.Errorf("This worker is not working on a job in the requested batch"))
+				_ = c.Error(cmd, fmt.Errorf("This worker is not working on a job in the requested batch"))
+				return
 			}
 
 			if err := batch.open(); err != nil {
-				c.Error(cmd, fmt.Errorf("Cannot open batch: %v", err))
+				_ = c.Error(cmd, fmt.Errorf("Cannot open batch: %v", err))
+				return
 			}
 
-			c.Ok()
+			_ = c.Result([]byte(batch.Id))
+			return
 		case "COMMIT":
-			batchId := qs[1]
-
+			batchId := parts[1]
+			if batchId == "" {
+				_ = c.Error(cmd, errors.New("bid is required"))
+				return
+			}
 			batch, err := b.getBatch(batchId)
 			if err != nil {
-				c.Error(cmd, fmt.Errorf("Cannot find batch: %v", err))
+				_ = c.Error(cmd, fmt.Errorf("Cannot find batch: %v", err))
+				return
 			}
 
 			if err := batch.commit(); err != nil {
-				c.Error(cmd, fmt.Errorf("Cannot commit batch: %v", err))
+				_ = c.Error(cmd, fmt.Errorf("Cannot commit batch: %v", err))
+				return
 			}
-			c.Ok()
-
+			_ = c.Ok()
+			return
 		case "STATUS":
-			batchId := qs[1]
+			batchId := parts[1]
 			batch, err := b.getBatch(batchId)
 			if err != nil {
-				c.Error(cmd, fmt.Errorf("Cannot find batch: %v", err))
+				_ = c.Error(cmd, fmt.Errorf("Cannot find batch: %v", err))
+				return
 			}
 			data, err := json.Marshal(map[string]interface{}{
-				"bid":         batchId,
-				"total":       batch.Meta.Total,
-				"pending":     batch.Meta.Total - batch.Meta.Failed - batch.Meta.Succeeded,
-				"description": batch.Meta.Description,
-				"created_at":  batch.Meta.CreatedAt,
+				"bid":          batchId,
+				"total":        batch.Meta.Total,
+				"pending":      batch.Meta.Total - batch.Meta.Failed - batch.Meta.Succeeded,
+				"description":  batch.Meta.Description,
+				"created_at":   batch.Meta.CreatedAt,
+				"completed_st": "",
+				"success_st":   "",
 			})
 			if err != nil {
 				c.Error(cmd, fmt.Errorf("Unable to marshal batch data: %v", err))
+				return
 			}
-			c.Result([]byte(data))
+			_ = c.Result([]byte(data))
+			return
 		default:
-			c.Error(cmd, fmt.Errorf("Invalid BATCH operation %s", qs[0]))
+			_ = c.Error(cmd, fmt.Errorf("Invalid BATCH operation %s", parts[0]))
 		}
 
 	}
 }
 
-/*
-These are the steps within middleware
-
-push:
-	- check for job.custom.bid
-	- check batch is open
-
-	- push event to update bid data:
-		- total + 1
-		- pending + 1
-
-ack:
-	- check for job.custom.bid
-	- check batch is open
-	- event to update bid data <- do checks in there:
-		- success + 1
-	- event to see if success job should be pushed
-	- event to see if completed job should be pushed
-
-fail:
-	- check for job.custom.bid
-	- check batch is open
-	- event to update bid data:
-		- failed + 1
-	- event to see if completed job should be pushed
-*/
-
-func (b *BatchSubSystem) addMiddleware() {
+func (b *BatchSubsystem) addMiddleware() {
 	// we have to set a custom fetcher in order to set the worker id for a job
 	b.Server.Manager().SetFetcher(b)
 	b.Server.Manager().AddMiddleware("push", b.pushMiddleware)
@@ -210,31 +215,35 @@ func (b *BatchSubSystem) addMiddleware() {
 	b.Server.Manager().AddMiddleware("fail", b.handleJobFinished(false))
 }
 
-func (b *BatchSubSystem) getBatchFromInterface(batchId interface{}) (*Batch, error) {
+func (b *BatchSubsystem) getBatchFromInterface(batchId interface{}) (*batch, error) {
 	bid, ok := batchId.(string)
 	if !ok {
 		return nil, errors.New("Invalid custom bid value")
 	}
 	batch, err := b.getBatch(bid)
 	if err != nil {
+		util.Warnf("Unable to retrieve batch: %v", err)
 		return nil, fmt.Errorf("Unable to get batch: %s", bid)
 	}
 	return batch, nil
 }
 
-func (b *BatchSubSystem) pushMiddleware(next func() error, ctx manager.Context) error {
+func (b *BatchSubsystem) pushMiddleware(next func() error, ctx manager.Context) error {
 	if bid, ok := ctx.Job().GetCustom("bid"); ok {
 		batch, err := b.getBatchFromInterface(bid)
 		if err != nil {
-			return fmt.Errorf("Unable to retrieve batch %s", bid)
+			return fmt.Errorf("Unable to get batch %s", bid)
 		}
-		batch.jobQueued(ctx.Job().Jid)
+		if err := batch.jobQueued(ctx.Job().Jid); err != nil {
+			util.Warnf("Unable to add batch %v", err)
+			return fmt.Errorf("Unable to add job %s to batch %s", ctx.Job().Jid, bid)
+		}
 		util.Infof("Added %s to batch %s", ctx.Job().Jid, batch.Id)
 	}
 	return next()
 }
 
-func (b *BatchSubSystem) Fetch(ctx context.Context, wid string, queues ...string) (manager.Lease, error) {
+func (b *BatchSubsystem) Fetch(ctx context.Context, wid string, queues ...string) (manager.Lease, error) {
 	lease, err := b.Fetcher.Fetch(ctx, wid, queues...)
 	if err == nil && lease != manager.Nothing {
 		job, err := lease.Job()
@@ -253,7 +262,7 @@ func (b *BatchSubSystem) Fetch(ctx context.Context, wid string, queues ...string
 	return lease, err
 }
 
-func (b *BatchSubSystem) fetchMiddleware(next func() error, ctx manager.Context) error {
+func (b *BatchSubsystem) fetchMiddleware(next func() error, ctx manager.Context) error {
 	middleware_err := next() // runs the rest of the middleware
 	if bid, ok := ctx.Job().GetCustom("bid"); ok {
 		batch, err := b.getBatchFromInterface(bid)
@@ -269,8 +278,32 @@ func (b *BatchSubSystem) fetchMiddleware(next func() error, ctx manager.Context)
 	return middleware_err
 }
 
-func (b *BatchSubSystem) handleJobFinished(success bool) func(next func() error, ctx manager.Context) error {
+func (b *BatchSubsystem) handleJobFinished(success bool) func(next func() error, ctx manager.Context) error {
 	return func(next func() error, ctx manager.Context) error {
+		if success {
+			// check if this is a success / complete job from batch
+			if bid, ok := ctx.Job().GetCustom("_bid"); ok {
+				batch, err := b.getBatchFromInterface(bid)
+				if err != nil {
+					util.Warnf("Unable to retrieve batch %s: %v", bid, err)
+					return next()
+				}
+				cb, ok := ctx.Job().GetCustom("_cb")
+				if !ok {
+					util.Warnf("Batch (%s) callback job (%s) does not have _cb specified", bid, ctx.Job().Type)
+					return next()
+				}
+				callbackType, ok := cb.(string)
+				if !ok {
+					util.Warnf("Error converting callback job type %s", cb)
+					return next()
+				}
+				if err := batch.callbackJobSucceded(callbackType); err != nil {
+					util.Warnf("Unable to update batch")
+				}
+				return next()
+			}
+		}
 		if bid, ok := ctx.Job().GetCustom("bid"); ok {
 			batch, err := b.getBatchFromInterface(bid)
 			if err != nil {
@@ -293,13 +326,13 @@ func (b *BatchSubSystem) handleJobFinished(success bool) func(next func() error,
 	}
 }
 
-func (b *BatchSubSystem) loadExistingBatches() error {
+func (b *BatchSubsystem) loadExistingBatches() error {
 	vals, err := b.Server.Manager().Redis().SMembers("batches").Result()
 	if err != nil {
 		return fmt.Errorf("retrieve batches: %v", err)
 	}
 	for idx := range vals {
-		batch, err := b.newBatch(vals[idx], &BatchMeta{})
+		batch, err := b.newBatch(vals[idx], &batchMeta{})
 		if err != nil {
 			util.Warnf("create batch: %v", err)
 			continue
@@ -308,24 +341,25 @@ func (b *BatchSubSystem) loadExistingBatches() error {
 	}
 	return nil
 }
-func (b *BatchSubSystem) newBatchMeta(description string, parentBid string, success string, complete string) *BatchMeta {
-	return &BatchMeta{
-		CreatedAt:   time.Now().UTC().Format(time.RFC3339Nano),
-		Total:       0,
-		Succeeded:   0,
-		Failed:      0,
-		Description: description,
-		ParentBid:   parentBid,
-		SuccessJob:  success,
-		CompleteJob: complete,
+func (b *BatchSubsystem) newBatchMeta(description string, success string, complete string) *batchMeta {
+	return &batchMeta{
+		CreatedAt:        time.Now().UTC().Format(time.RFC3339Nano),
+		Total:            0,
+		Succeeded:        0,
+		Failed:           0,
+		Description:      description,
+		SuccessJob:       success,
+		CompleteJob:      complete,
+		SuccessJobState:  "",
+		CompleteJobState: "",
 	}
 }
 
-func (b *BatchSubSystem) newBatch(batchId string, meta *BatchMeta) (*Batch, error) {
+func (b *BatchSubsystem) newBatch(batchId string, meta *batchMeta) (*batch, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	batch := &Batch{
+	batch := &batch{
 		Id:          batchId,
 		BatchKey:    fmt.Sprintf("batch-%s", batchId),
 		JobsKey:     fmt.Sprintf("jobs-%s", batchId),
@@ -338,10 +372,10 @@ func (b *BatchSubSystem) newBatch(batchId string, meta *BatchMeta) (*Batch, erro
 		Server:      b.Server,
 	}
 	if err := batch.init(); err != nil {
-		return nil, fmt.Errorf("Unable to initialize batch: %v", err)
+		return nil, fmt.Errorf("initialize batch: %v", err)
 	}
 	if err := b.Server.Manager().Redis().SAdd("batches", batchId).Err(); err != nil {
-		return nil, fmt.Errorf("Unable to store batch: %v", err)
+		return nil, fmt.Errorf("store batch: %v", err)
 	}
 
 	b.Server.Manager().Redis().SetNX(batch.BatchKey, batch.Id, time.Duration(2*time.Hour))
@@ -352,7 +386,7 @@ func (b *BatchSubSystem) newBatch(batchId string, meta *BatchMeta) (*Batch, erro
 
 }
 
-func (b *BatchSubSystem) getBatch(batchId string) (*Batch, error) {
+func (b *BatchSubsystem) getBatch(batchId string) (*batch, error) {
 	if batchId == "" {
 		return nil, fmt.Errorf("batchId cannot be blank")
 	}
@@ -365,15 +399,15 @@ func (b *BatchSubSystem) getBatch(batchId string) (*Batch, error) {
 
 	if err := b.Server.Manager().Redis().Get(batch.BatchKey).Err(); err != nil {
 		b.removeBatch(batch)
-		return nil, fmt.Errorf("Batch was not commited within 2 hours.")
+		return nil, fmt.Errorf("Batch was not commited within 2 hours")
 	}
 
 	return batch, nil
 }
 
-func (b *BatchSubSystem) removeBatch(batch *Batch) {
+func (b *BatchSubsystem) removeBatch(batch *batch) {
 	if err := b.Server.Manager().Redis().SRem("batches", batch.Id).Err(); err != nil {
-		util.Warnf("Unable to remove batch: %s, %v", batch.Id, err)
+		util.Warnf("remove batch: %s, %v", batch.Id, err)
 	}
 	delete(b.Batches, batch.Id)
 	batch.remove()
