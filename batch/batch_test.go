@@ -58,6 +58,12 @@ func TestBatchSuccess(t *testing.T) {
 
 		assert.Equal(t, "1", batchData.Meta.CompleteJobState)
 		assert.Equal(t, "1", batchData.Meta.SuccessJobState)
+		// completeJob
+		err = processJob(cl, true, func(job *client.Job) {
+			assert.Equal(t, "batchDone", job.Type)
+		})
+		assert.Nil(t, err)
+		assert.Equal(t, "2", batchData.Meta.CompleteJobState)
 		// successJob
 		err = processJob(cl, true, func(job *client.Job) {
 			assert.Equal(t, "batchSuccess", job.Type)
@@ -65,12 +71,6 @@ func TestBatchSuccess(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, "2", batchData.Meta.SuccessJobState)
 
-		// completeJob
-		err = processJob(cl, true, func(job *client.Job) {
-			assert.Equal(t, "batchDone", job.Type)
-		})
-		assert.Nil(t, err)
-		assert.Equal(t, "2", batchData.Meta.CompleteJobState)
 		fetchedJob, err := cl.Fetch("default")
 		assert.Nil(t, fetchedJob)
 	})
@@ -123,7 +123,7 @@ func TestBatchComplete(t *testing.T) {
 			assert.Equal(t, "batchDone", job.Type)
 		})
 		assert.Nil(t, err)
-
+		assert.Equal(t, "", batchData.Meta.SuccessJobState)
 		fetchedJob, err := cl.Fetch("default")
 		assert.Nil(t, fetchedJob)
 	})

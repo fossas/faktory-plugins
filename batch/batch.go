@@ -253,17 +253,17 @@ func (b *batch) removeJobFromBatch(jobId string, success bool) error {
 func (b *batch) isBatchDone() bool {
 	totalFinished := b.Meta.Succeeded + b.Meta.Failed
 	// TODO: check child jobs
+
 	return b.Meta.Committed == true && totalFinished == b.Meta.Total
 }
 
 func (b *batch) checkBatchDone() {
 	if b.isBatchDone() {
-		if b.Meta.Succeeded == b.Meta.Total && b.Meta.SuccessJob != "" {
-			b.queueBatchDoneJob(b.Meta.SuccessJob, "success")
-		}
 		if b.Meta.CompleteJob != "" {
 			b.queueBatchDoneJob(b.Meta.CompleteJob, "complete")
-
+		}
+		if b.Meta.Succeeded == b.Meta.Total && b.Meta.SuccessJob != "" {
+			b.queueBatchDoneJob(b.Meta.SuccessJob, "success")
 		}
 	}
 }
