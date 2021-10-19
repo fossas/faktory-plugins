@@ -30,8 +30,8 @@ type BatchSubsystem struct {
 }
 
 // structure for a new batch request
-// Succecss and Complete are jobs to be queued
-// once the batch has been commited and all jobs procssed
+// Success and Complete are jobs to be queued
+// once the batch has been commited and all jobs processed
 type NewBatchRequest struct {
 	//	ParentBid   string      `json:"parent_bid,omitempty"`
 	Description string      `json:"description,omitempty"`
