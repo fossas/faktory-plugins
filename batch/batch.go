@@ -20,10 +20,11 @@ type batch struct {
 	JobsKey  string
 	MetaKey  string
 	Meta     *batchMeta
-	rclient  *redis.Client
-	mu       sync.Mutex
+	Jobs     []string
 	Workers  map[string]string
 	Server   *server.Server
+	rclient  *redis.Client
+	mu       sync.Mutex
 }
 
 const (
@@ -57,12 +58,17 @@ func (b *batch) init() error {
 	}
 
 	if err := b.Server.Manager().Redis().SAdd("batches", b.Id).Err(); err != nil {
-		return fmt.Errorf("newBatch store batch: %v", err)
+		return fmt.Errorf("init store batch: %v", err)
 	}
 
 	if err := b.Server.Manager().Redis().SetNX(b.BatchKey, b.Id, time.Duration(2*time.Hour)).Err(); err != nil {
-		return fmt.Errorf("newBatch expiration: %v", err)
+		return fmt.Errorf("init set expiration: %v", err)
 	}
+	jobs, err := b.Server.Manager().Redis().SMembers(b.JobsKey).Result()
+	if err != nil {
+		return fmt.Errorf("init get jobs: %v", err)
+	}
+	b.Jobs = jobs
 
 	if len(meta) == 0 {
 		// set default values
@@ -180,10 +186,13 @@ func (b *batch) hasWorker(wid string) bool {
 
 func (b *batch) remove() error {
 	b.mu.Lock()
+	if err := b.Server.Manager().Redis().SRem("batches", b.Id).Err(); err != nil {
+		return fmt.Errorf("remove batch: %s, %v", b.Id, err)
+	}
 	if err := b.rclient.Del(b.MetaKey).Err(); err != nil {
 		return fmt.Errorf("remove batch: %s %v", b.Id, err)
 	}
-	if err := b.Server.Manager().Redis().SRem("batches", b.Id).Err(); err != nil {
+	if err := b.rclient.Del(b.JobsKey).Err(); err != nil {
 		return fmt.Errorf("remove batch: %s, %v", b.Id, err)
 	}
 	b.mu.Unlock()
@@ -197,7 +206,7 @@ func (b *batch) updateCommited(commited bool) error {
 	}
 	if commited {
 		// remove expiration as batch has been commited
-		if err := b.Server.Manager().Redis().Persist(b.BatchKey).Err(); err != nil {
+		if err := b.extendBatchExpiration(); err != nil {
 			return fmt.Errorf("updatedCommited set expire: %v", err)
 		}
 		b.checkBatchDone()
@@ -207,6 +216,10 @@ func (b *batch) updateCommited(commited bool) error {
 		}
 	}
 	return nil
+}
+
+func (b *batch) extendBatchExpiration() error {
+	return b.Server.Manager().Redis().Expire(b.BatchKey, time.Duration(2*time.Hour)).Err()
 }
 
 func (b *batch) updateJobCallbackState(callbackType string, state string) error {
@@ -231,6 +244,7 @@ func (b *batch) addJobToBatch(jobId string) error {
 	if err := b.rclient.HIncrBy(b.MetaKey, "total", 1).Err(); err != nil {
 		return fmt.Errorf("increase job total: %v", err)
 	}
+	b.Jobs = append(b.Jobs, jobId)
 	b.Meta.Total += 1
 	return nil
 }
@@ -245,6 +259,12 @@ func (b *batch) removeJobFromBatch(jobId string, success bool) error {
 	} else {
 		b.Meta.Failed += 1
 		b.rclient.HIncrBy(b.MetaKey, "failed", 1)
+	}
+	for i, v := range b.Jobs {
+		if v == jobId {
+			b.Jobs = append(b.Jobs[:i], b.Jobs[i+1:]...)
+			break
+		}
 	}
 	b.checkBatchDone()
 	return nil

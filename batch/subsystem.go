@@ -361,10 +361,11 @@ func (b *BatchSubsystem) newBatch(batchId string, meta *batchMeta) (*batch, erro
 		BatchKey: fmt.Sprintf("batch-%s", batchId),
 		JobsKey:  fmt.Sprintf("jobs-%s", batchId),
 		MetaKey:  fmt.Sprintf("meta-%s", batchId),
+		Workers:  make(map[string]string),
+		Jobs:     make([]string, 0),
 		Meta:     meta,
 		rclient:  b.Server.Manager().Redis(),
 		mu:       sync.Mutex{},
-		Workers:  make(map[string]string),
 		Server:   b.Server,
 	}
 	if err := batch.init(); err != nil {
