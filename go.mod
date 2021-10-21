@@ -8,6 +8,8 @@ require github.com/stretchr/testify v1.7.0
 
 require (
 	github.com/BurntSushi/toml v0.4.1 // indirect
+	github.com/DataDog/datadog-go v4.8.2+incompatible // indirect
+	github.com/Microsoft/go-winio v0.5.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-redis/redis v6.15.7+incompatible // indirect
 	github.com/justinas/nosurf v1.1.1 // indirect
