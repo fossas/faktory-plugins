@@ -161,8 +161,8 @@ func (m *metrics) Execute() error {
 				return nil
 			}
 			metricName := fmt.Sprintf("jobs.%s.queued.time", job.Queue)
-			timeElapsed := time.Duration(time.Now().Sub(t)).Seconds()
-			m.Client().Gauge(metricName, timeElapsed, m.tags, 1)
+			timeElapsed := time.Duration(time.Now().Sub(t)).Milliseconds()
+			m.Client().Gauge(metricName, float64(timeElapsed), m.tags, 1)
 			return nil
 		})
 
