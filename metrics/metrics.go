@@ -104,7 +104,7 @@ func (m *MetricsSubsystem) addMiddleware() {
 		tags := m.getTagsFromJob(ctx)
 
 		if ctx.Reservation() != nil {
-			m.statsdClient.Timing("jobs.succeeded.time", time.Duration(ctx.Reservation().ReservedAt().Sub(time.Now())), tags, 1)
+			m.statsdClient.Timing("jobs.succeeded.time", time.Duration(time.Now().Sub(ctx.Reservation().ReservedAt())), tags, 1)
 		}
 
 		m.statsdClient.Incr("jobs.succeeded.count", tags, 1)
@@ -115,7 +115,7 @@ func (m *MetricsSubsystem) addMiddleware() {
 		tags := m.getTagsFromJob(ctx)
 
 		if ctx.Reservation() != nil {
-			m.statsdClient.Timing("jobs.failed.time", time.Duration(ctx.Reservation().ReservedAt().Sub(time.Now())), tags, 1)
+			m.statsdClient.Timing("jobs.failed.time", time.Duration(time.Now().Sub(ctx.Reservation().ReservedAt())), tags, 1)
 		}
 
 		if ctx.Job().Failure.RetryCount >= ctx.Job().Retry {
