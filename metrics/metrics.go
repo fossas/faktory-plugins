@@ -112,29 +112,35 @@ func (m *MetricsSubsystem) getTagsFromJob(ctx manager.Context) []string {
 
 func (m *MetricsSubsystem) addMiddleware() {
 	m.Server.Manager().AddMiddleware("ack", func(next func() error, ctx manager.Context) error {
+		if m.Client() == nil {
+			return nil
+		}
 		tags := m.getTagsFromJob(ctx)
 
 		if ctx.Reservation() != nil {
-			m.statsdClient.Timing("jobs.succeeded.time", time.Duration(time.Now().Sub(ctx.Reservation().ReservedAt())), tags, 1)
+			m.Client().Timing("jobs.succeeded.time", time.Duration(time.Now().Sub(ctx.Reservation().ReservedAt())), tags, 1)
 		}
 
-		m.statsdClient.Incr("jobs.succeeded.count", tags, 1)
+		m.Client().Incr("jobs.succeeded.count", tags, 1)
 
 		return next()
 	})
 	m.Server.Manager().AddMiddleware("fail", func(next func() error, ctx manager.Context) error {
+		if m.Client() == nil {
+			return nil
+		}
 		tags := m.getTagsFromJob(ctx)
 
 		if ctx.Reservation() != nil {
-			m.statsdClient.Timing("jobs.failed.time", time.Duration(time.Now().Sub(ctx.Reservation().ReservedAt())), tags, 1)
+			m.Client().Timing("jobs.failed.time", time.Duration(time.Now().Sub(ctx.Reservation().ReservedAt())), tags, 1)
 		}
 
 		if ctx.Job().Failure.RetryCount >= ctx.Job().Retry {
 			// only count a job as failed on the last retry
-			m.statsdClient.Incr("jobs.failed.count", tags, 1)
+			m.Client().Incr("jobs.failed.count", tags, 1)
 		} else if ctx.Job().Retry > 0 && ctx.Job().Failure.RetryCount == 0 {
 			// only count first retry
-			m.statsdClient.Incr("jobs.retried_at_least_once.count", tags, 1)
+			m.Client().Incr("jobs.retried_at_least_once.count", tags, 1)
 		}
 		return next()
 	})
@@ -155,6 +161,9 @@ func (m *metrics) Name() string {
 
 func (m *metrics) Execute() error {
 	// track count for each queue
+	if m.Client() == nil {
+		return nil
+	}
 	m.store.EachQueue(func(queue storage.Queue) {
 		count := queue.Size()
 		metricName := fmt.Sprintf("jobs.%s.queued.count", queue.Name())
