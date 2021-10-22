@@ -3,6 +3,8 @@ package metrics
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/DataDog/datadog-go/statsd"
@@ -75,14 +77,21 @@ func (m *MetricsSubsystem) getOptions(s *server.Server) *options {
 	return &options{
 		statsdServer: s.Options.String("metrics", "statsd_server", ""),
 	}
-
 }
+
 func (m *MetricsSubsystem) connectStatsd() error {
 	if m.Options.statsdServer == "" {
 		return fmt.Errorf("statsd server not configured")
 
 	}
-	client, err := statsd.New(m.Options.statsdServer)
+
+	// dogstatsd doesn't parse DD_TAGS so do it here
+	var tags []string
+	if value := os.Getenv("DD_TAGS"); value != "" {
+		tags = strings.Split(value, ",")
+	}
+
+	client, err := statsd.New(m.Options.statsdServer, statsd.WithTags(tags))
 	if err != nil {
 		return fmt.Errorf("unable to create statsd client: %v", err)
 	}
@@ -93,9 +102,11 @@ func (m *MetricsSubsystem) connectStatsd() error {
 func (m *MetricsSubsystem) getTagsFromJob(ctx manager.Context) []string {
 	jid := fmt.Sprintf("jid:%s", ctx.Job().Jid)
 	jobType := fmt.Sprintf("jobtype:%s", ctx.Job().Type)
+	queueName := fmt.Sprintf("queue:%s", ctx.Job().Queue)
 	return []string{
 		jid,
 		jobType,
+		queueName,
 	}
 }
 
