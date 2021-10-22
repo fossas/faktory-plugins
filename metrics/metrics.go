@@ -21,7 +21,6 @@ type MetricsSubsystem struct {
 
 type options struct {
 	statsdServer string
-	tags         []string
 }
 
 // starts the subsystem
@@ -36,6 +35,7 @@ func (m *MetricsSubsystem) Start(s *server.Server) error {
 	m.Server.AddTask(10, &metrics{m.Server.Store(), m.Client, 1, []string{}})
 
 	m.addMiddleware()
+	util.Info("Started statsd metrics")
 	return nil
 }
 
@@ -104,7 +104,7 @@ func (m *MetricsSubsystem) addMiddleware() {
 		tags := m.getTagsFromJob(ctx)
 
 		if ctx.Reservation() != nil {
-			m.statsdClient.Timing("jobs.succeeded.time", time.Duration(time.Until(ctx.Reservation().ReservedAt())), tags, 1)
+			m.statsdClient.Timing("jobs.succeeded.time", time.Duration(ctx.Reservation().ReservedAt().Sub(time.Now())), tags, 1)
 		}
 
 		m.statsdClient.Incr("jobs.succeeded.count", tags, 1)
@@ -115,7 +115,7 @@ func (m *MetricsSubsystem) addMiddleware() {
 		tags := m.getTagsFromJob(ctx)
 
 		if ctx.Reservation() != nil {
-			m.statsdClient.Timing("jobs.failed.time", time.Duration(time.Until(ctx.Reservation().ReservedAt())), tags, 1)
+			m.statsdClient.Timing("jobs.failed.time", time.Duration(ctx.Reservation().ReservedAt().Sub(time.Now())), tags, 1)
 		}
 
 		if ctx.Job().Failure.RetryCount >= ctx.Job().Retry {
@@ -147,7 +147,7 @@ func (m *metrics) Execute() error {
 	m.store.EachQueue(func(queue storage.Queue) {
 		count := queue.Size()
 		metricName := fmt.Sprintf("jobs.%s.queued.count", queue.Name())
-		m.Client().Count(metricName, int64(count), m.tags, m.rate)
+		m.Client().Count(metricName, int64(count), m.tags, 1)
 
 		queue.Page(0, 1, func(index int, e []byte) error {
 			var job client.Job
@@ -161,8 +161,8 @@ func (m *metrics) Execute() error {
 				return nil
 			}
 			metricName := fmt.Sprintf("jobs.%s.queued.time", job.Queue)
-			timeElapsed := time.Duration(time.Until(t)).Seconds()
-			m.Client().Gauge(metricName, timeElapsed, m.tags, m.rate)
+			timeElapsed := time.Duration(time.Now().Sub(t)).Seconds()
+			m.Client().Gauge(metricName, timeElapsed, m.tags, 1)
 			return nil
 		})
 
