@@ -9,6 +9,7 @@ import (
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/util"
 	"github.com/contribsys/faktory/webui"
+	"github.com/fossas/faktory-plugins/metrics"
 	"github.com/fossas/faktory-plugins/uniq"
 )
 
@@ -45,8 +46,9 @@ func main() {
 	s.Register(webui.Subsystem(opts.WebBinding))
 	// fossa plugins
 	s.Register(new(uniq.UniqSubsystem))
-
+	s.Register(new(metrics.MetricsSubsystem))
 	go cli.HandleSignals(s)
+
 	go func() {
 		_ = s.Run()
 	}()
