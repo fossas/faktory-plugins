@@ -168,8 +168,8 @@ func (m *metrics) Execute() error {
 		count := queue.Size()
 		metricName := fmt.Sprintf("jobs.%s.queued.count", queue.Name())
 		m.Client().Count(metricName, int64(count), m.tags, 1)
-
-		queue.Page(0, 1, func(index int, e []byte) error {
+		// count=0 will pull exactly 1 job
+		queue.Page(0, 0, func(index int, e []byte) error {
 			var job client.Job
 			if err := json.Unmarshal(e, &job); err != nil {
 				util.Warnf("metrics task unable to unmarshal job data: %v", err)
