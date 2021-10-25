@@ -11,85 +11,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DataDog/datadog-go/statsd"
 	"github.com/contribsys/faktory/cli"
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/server"
+	"github.com/fossas/faktory-plugins/metrics/mocks"
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 )
-
-type StubStatsd struct {
-	calls map[string]map[string]int
-}
-
-func (s *StubStatsd) setup() {
-	if s.calls == nil {
-		s.calls = make(map[string]map[string]int)
-	}
-}
-func (s *StubStatsd) track(event string, name string) {
-	if _, ok := s.calls[event]; !ok {
-		s.calls[event] = make(map[string]int)
-	}
-	if _, ok := s.calls[event][name]; !ok {
-		s.calls[event][name] = 0
-	}
-	s.calls[event][name] += 1
-}
-func (s *StubStatsd) Incr(name string, tags []string, rate float64) error {
-	s.track("incr", name)
-
-	return nil
-}
-func (s *StubStatsd) Decr(name string, tags []string, rate float64) error {
-	s.track("decr", name)
-	return nil
-}
-func (s *StubStatsd) Count(name string, value int64, tags []string, rate float64) error {
-	s.track("count", name)
-	return nil
-}
-func (s *StubStatsd) Gauge(name string, value float64, tags []string, rate float64) error {
-	s.track("count", name)
-	return nil
-}
-func (s *StubStatsd) Timing(name string, value time.Duration, tags []string, rate float64) error {
-	s.track("timing", name)
-	return nil
-}
-func (s *StubStatsd) Histogram(name string, value float64, tags []string, rate float64) error {
-	return nil
-}
-func (s *StubStatsd) Distribution(name string, value float64, tags []string, rate float64) error {
-	return nil
-}
-func (s *StubStatsd) Set(name string, value string, tags []string, rate float64) error {
-	return nil
-}
-func (s *StubStatsd) TimeInMilliseconds(name string, value float64, tags []string, rate float64) error {
-	return nil
-}
-func (s *StubStatsd) Event(e *statsd.Event) error {
-	return nil
-}
-func (s *StubStatsd) SimpleEvent(title, text string) error {
-	return nil
-}
-func (s *StubStatsd) ServiceCheck(sc *statsd.ServiceCheck) error {
-	return nil
-}
-func (s *StubStatsd) SimpleServiceCheck(name string, status statsd.ServiceCheckStatus) error {
-	return nil
-}
-func (s *StubStatsd) Close() error {
-	return nil
-}
-func (s *StubStatsd) Flush() error {
-	return nil
-}
-func (s *StubStatsd) SetWriteTimeout(d time.Duration) error {
-	return nil
-}
 
 const (
 	validStatsdConfig = `
@@ -110,6 +38,11 @@ func createConfigDir(t *testing.T) string {
 }
 
 func TestMetrics(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	defer mockCtrl.Finish()
+
+	mockDoer := mocks.NewMockClientInterface(mockCtrl)
+
 	t.Run("statsd_server is invalid", func(t *testing.T) {
 		system := new(MetricsSubsystem)
 		configDir := createConfigDir(t)
@@ -165,10 +98,23 @@ func TestMetrics(t *testing.T) {
 		runSystem(configDir, func(server *server.Server, cl *client.Client) {
 			system.Server = server
 			system.Options = system.getOptions(server)
-			statsd := &StubStatsd{}
-			statsd.setup()
-			system.statsdClient = statsd
+			system.statsdClient = mockDoer
 			system.addMiddleware()
+
+			mockDoer.EXPECT().Incr("jobs.succeeded.count", gomock.Any(), gomock.Any()).Return(nil).Times(3)
+			mockDoer.EXPECT().Timing("jobs.succeeded.time", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(3)
+			mockDoer.EXPECT().Incr("jobs.failed.count", gomock.Any(), gomock.Any()).Return(nil).Times(3)
+			mockDoer.EXPECT().Timing("jobs.failed.time", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(4)
+			mockDoer.EXPECT().Count("jobs.default.queued.count", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("jobs.default.queued.time", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Count("jobs.builds.queued.count", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("jobs.builds.queued.time", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Count("jobs.tests.queued.count", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("jobs.tests.queued.time", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+
+			mockDoer.EXPECT().Incr("jobs.retried_at_least_once.count", gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Count("jobs.retry.queued.count", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("jobs.retry.queued.time", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
 
 			if err := cl.Push(createJob("default", "Scan", 1)); err != nil {
 				panic(err)
@@ -229,25 +175,14 @@ func TestMetrics(t *testing.T) {
 			processJob("default", cl, true, nil)
 			processJob("builds", cl, true, nil)
 
-			assert.Equal(t, statsd.calls["incr"]["jobs.succeeded.count"], 3)
-			assert.Equal(t, statsd.calls["timing"]["jobs.succeeded.time"], 3)
-
 			processJob("default", cl, false, nil)
 			processJob("builds", cl, false, nil)
 			processJob("tests", cl, false, nil)
 
-			assert.Equal(t, statsd.calls["incr"]["jobs.failed.count"], 3)
-			assert.Equal(t, statsd.calls["timing"]["jobs.failed.time"], 3)
-
 			m := &metrics{server.Store(), system.Client, 1, []string{}}
 			m.Execute()
 
-			assert.Equal(t, statsd.calls["count"]["jobs.default.queued.count"], 1)
-			assert.Equal(t, statsd.calls["count"]["jobs.builds.queued.count"], 1)
-			assert.Equal(t, statsd.calls["count"]["jobs.tests.queued.count"], 1)
-
 			processJob("retry", cl, false, nil)
-			assert.Equal(t, statsd.calls["incr"]["jobs.retried_at_least_once.count"], 1)
 		})
 	})
 }

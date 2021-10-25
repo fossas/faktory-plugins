@@ -12,6 +12,7 @@ require (
 	github.com/Microsoft/go-winio v0.5.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-redis/redis v6.15.7+incompatible // indirect
+	github.com/golang/mock v1.6.0 // indirect
 	github.com/justinas/nosurf v1.1.1 // indirect
 	github.com/nxadm/tail v1.4.8 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
