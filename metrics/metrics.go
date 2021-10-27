@@ -48,6 +48,7 @@ func (m *MetricsSubsystem) Start(s *server.Server) error {
 	}
 
 	if err := m.createStatsDClient(); err != nil {
+		util.Warnf("Unable to create statsD client: %v", err)
 		return fmt.Errorf("Unable to create statsD client")
 	}
 	m.Server.AddTask(10, &metricsTask{m})
