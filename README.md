@@ -17,21 +17,30 @@ Metrics tracked through middleware are:
 `jobs.succeeded.time` - time to complete
 `jobs.failed.count` - number of jobs failed
 `jobs.failed.time` - time to complete
-`jobs.retried_at_least_once.count` - jobs with a retry > 0 that have failed once
 
 Metrics tracked through a task (every 10 seconds) are:
-`jobs.{queueName}.queued.count` - number of jobs in a queue by name
-`jobs.{queueName}.queued.time` - current queue time for next job
 
-to add tags set the env variable `DD_TAGS="tagName:value,tagName:value"
+`jobs.enqueued.{queueName}.count` - number of jobs in a queue by name
+`jobs.enqueued.{queueName}.time` - current queue time for next job
+`jobs.working.count` - number of jobs currently running
+`jobs.scheduled.count` - number of jobs scheduled
+`jobs.retries.count` - number of jobs in retry state
+`jobs.dead.count` - number of dead jobs
+`jobs.enqueued.count` - total number of enqueued jobs
 
 #### Configuration
 
-Any file ending in .toml will be read as a configuration file for faktory. To enable a connection to the statsd server create a file and this:
+Any file ending in .toml will be read as a configuration file for faktory. Here's an example:
 ```
 [metrics]
-statsd_server = "host:port"
+enabled = true # enables this plugin
+namespace = "jobs" # changes the prefix for the metric from `jobs.` to the value specified
+tags = ["tag1:value1", "tag2:value2"] # tags passed to datadog on every metric
 ```
+
+Tags can also be set the with env variable `DD_TAGS="tagName:value,tagName:value"
+
+specify the host with `DD_AGENT_HOST`
 
 ## License
 
