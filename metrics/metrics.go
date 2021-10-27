@@ -51,7 +51,8 @@ func (m *MetricsSubsystem) Start(s *server.Server) error {
 		util.Warnf("Unable to create statsD client: %v", err)
 		return fmt.Errorf("Unable to create statsD client")
 	}
-	m.Server.AddTask(10, &metricsTask{m})
+	// submit metrics every 30 seconds
+	m.Server.AddTask(30, &metricsTask{m})
 
 	m.addMiddleware()
 	util.Info("Started statsd metrics")
