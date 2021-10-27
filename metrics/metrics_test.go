@@ -108,6 +108,7 @@ func TestMetrics(t *testing.T) {
 			tags := []string{"tag1:value1", "tag2:value2"}
 			mockDoer.EXPECT().Incr("jobs.succeeded.count", gomock.Any(), gomock.Any()).Return(nil).Times(3)
 			mockDoer.EXPECT().Timing("jobs.succeeded.time", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(3)
+			// one of the failed jobs has a retry value > 0
 			mockDoer.EXPECT().Incr("jobs.failed.count", gomock.Any(), gomock.Any()).Return(nil).Times(2)
 			mockDoer.EXPECT().Timing("jobs.failed.time", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(3)
 
