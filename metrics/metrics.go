@@ -1,197 +1,143 @@
 package metrics
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/DataDog/datadog-go/statsd"
-	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/manager"
 	"github.com/contribsys/faktory/server"
-	"github.com/contribsys/faktory/storage"
 	"github.com/contribsys/faktory/util"
 )
 
+var _ server.Subsystem = &MetricsSubsystem{}
+
+// Metrics Subsystem uses dogstatsd to submit metrics for queues
+// middleware is used to send metrics for suceeded/failed job count and time to complete
+// a task is used to track the count of each queue and how long the next job has been waiting
 type MetricsSubsystem struct {
-	statsdClient statsd.ClientInterface
+	statsDClient statsd.ClientInterface
 	Server       *server.Server
-	Options      *options
+	Options      *Options
 }
 
-type options struct {
-	statsdServer string
+// Options for the plugin
+type Options struct {
+	// Enabled controls whether or not the plugin will function
+	Enabled bool
+	// Tags sent to datdog
+	Tags []string
+	// Prefix for metrics
+	Namespace string
 }
 
-// starts the subsystem
-// connects to statsd server
+// Start starts the subsystem
+// get options from global config "[metrics]"
+//
 func (m *MetricsSubsystem) Start(s *server.Server) error {
+	if _, ok := s.Options.GlobalConfig["metrics"]; !ok {
+		return fmt.Errorf("No [metrics] configuration found, plugin cannot start")
+	}
+
 	m.Server = s
 	m.Options = m.getOptions(s)
-	if err := m.connectStatsd(); err != nil {
-		util.Warnf("Unable to connect to statsd: %v", err)
+
+	if !m.Options.Enabled {
 		return nil
 	}
-	m.Server.AddTask(10, &metrics{m.Server.Store(), m.Client, 1, []string{}})
+
+	if err := m.createStatsDClient(); err != nil {
+		return fmt.Errorf("Unable to create statsD client")
+	}
+	m.Server.AddTask(10, &metricsTask{m})
 
 	m.addMiddleware()
 	util.Info("Started statsd metrics")
 	return nil
 }
 
-// returns the name of the subsystem or plugin
+// Name - returns the name of the subsystem or plugin
 func (m *MetricsSubsystem) Name() string {
 	return "metrics"
 }
 
-// reload, config may of changed so re-create statsd client
+// Reload - the config is reloaded by faktory
+// update the plugin and re-create dogstatsd client if needed
 func (m *MetricsSubsystem) Reload(s *server.Server) error {
-	m.Server = s
-	opts := m.getOptions(s)
-
-	if m.Options.statsdServer != opts.statsdServer {
-		util.Warnf("Statsd configuration changed")
-		m.Options.statsdServer = opts.statsdServer
-		if m.statsdClient != nil {
-			m.statsdClient.Close()
-		}
-		return m.connectStatsd()
-	}
 	return nil
 }
 
-// shutdown - nothing needs to be done but the function must exist for subsystems
+// Shutdown - nothing needs to be done but the function must exist for subsystems
 func (m *MetricsSubsystem) Shutdown(s *server.Server) error {
-	m.statsdClient.Close()
+	if err := m.StatsDClient().Close(); err != nil {
+		return fmt.Errorf("Unable to close statsd client: %v", err)
+	}
+
 	return nil
 }
 
-// returns the statsd client
-func (m *MetricsSubsystem) Client() statsd.ClientInterface {
-	return m.statsdClient
+// StatsDClient returns the statsd client
+func (m *MetricsSubsystem) StatsDClient() statsd.ClientInterface {
+	return m.statsDClient
 }
 
-func (m *MetricsSubsystem) getOptions(s *server.Server) *options {
-	return &options{
-		statsdServer: s.Options.String("metrics", "statsd_server", ""),
+// PrefixMetricName - adds configured namespace to the metric
+
+func (m *MetricsSubsystem) PrefixMetricName(metricName string) string {
+	return fmt.Sprintf("%s.%s", m.Options.Namespace, metricName)
+}
+
+func (m *MetricsSubsystem) getOptions(s *server.Server) *Options {
+	enabledValue := s.Options.Config("metrics", "enabled", false)
+	enabled, ok := enabledValue.(bool)
+	if !ok {
+		enabled = false
+	}
+
+	tags := []string{}
+	tagsValue := s.Options.Config("metrics", "tags", []string{})
+	if tagsInterface, ok := tagsValue.([]interface{}); ok {
+		for _, tag := range tagsInterface {
+			if tagValue, ok := tag.(string); ok {
+				tags = append(tags, tagValue)
+			}
+
+		}
+	}
+
+	namespace := s.Options.String("metrics", "namespace", "jobs")
+	return &Options{
+		Enabled:   enabled,
+		Tags:      tags,
+		Namespace: namespace,
 	}
 }
 
-func (m *MetricsSubsystem) connectStatsd() error {
-	if m.Options.statsdServer == "" {
-		return fmt.Errorf("statsd server not configured")
-
-	}
+func (m *MetricsSubsystem) createStatsDClient() error {
+	tags := m.Options.Tags
 
 	// dogstatsd doesn't parse DD_TAGS so do it here
-	var tags []string
 	if value := os.Getenv("DD_TAGS"); value != "" {
-		tags = strings.Split(value, ",")
+		for _, tag := range strings.Split(value, "") {
+			tags = append(tags, strings.TrimSpace(tag))
+		}
 	}
 
-	client, err := statsd.New(m.Options.statsdServer, statsd.WithTags(tags))
+	// passing "" uses env
+	statsDClient, err := statsd.New("", statsd.WithTags(tags))
 	if err != nil {
 		return fmt.Errorf("unable to create statsd client: %v", err)
 	}
-	m.statsdClient = client
+	m.statsDClient = statsDClient
 	return nil
 }
 
 func (m *MetricsSubsystem) getTagsFromJob(ctx manager.Context) []string {
-	jid := fmt.Sprintf("jid:%s", ctx.Job().Jid)
 	jobType := fmt.Sprintf("jobtype:%s", ctx.Job().Type)
 	queueName := fmt.Sprintf("queue:%s", ctx.Job().Queue)
 	return []string{
-		jid,
 		jobType,
 		queueName,
 	}
-}
-
-func (m *MetricsSubsystem) addMiddleware() {
-	m.Server.Manager().AddMiddleware("ack", func(next func() error, ctx manager.Context) error {
-		if m.Client() == nil {
-			return nil
-		}
-		tags := m.getTagsFromJob(ctx)
-
-		if ctx.Reservation() != nil {
-			m.Client().Timing("jobs.succeeded.time", time.Duration(time.Now().Sub(ctx.Reservation().ReservedAt())), tags, 1)
-		}
-
-		m.Client().Incr("jobs.succeeded.count", tags, 1)
-
-		return next()
-	})
-	m.Server.Manager().AddMiddleware("fail", func(next func() error, ctx manager.Context) error {
-		if m.Client() == nil {
-			return nil
-		}
-		tags := m.getTagsFromJob(ctx)
-
-		if ctx.Reservation() != nil {
-			m.Client().Timing("jobs.failed.time", time.Duration(time.Now().Sub(ctx.Reservation().ReservedAt())), tags, 1)
-		}
-
-		if ctx.Job().Failure.RetryCount >= ctx.Job().Retry {
-			// only count a job as failed on the last retry
-			m.Client().Incr("jobs.failed.count", tags, 1)
-		} else if ctx.Job().Retry > 0 && ctx.Job().Failure.RetryCount == 0 {
-			// only count first retry
-			m.Client().Incr("jobs.retried_at_least_once.count", tags, 1)
-		}
-		return next()
-	})
-}
-
-type metricsTask func(time.Time) (int64, error)
-
-type metrics struct {
-	store  storage.Store
-	Client func() statsd.ClientInterface
-	rate   float64
-	tags   []string
-}
-
-func (m *metrics) Name() string {
-	return "Metrics"
-}
-
-func (m *metrics) Execute() error {
-	// track count for each queue
-	if m.Client() == nil {
-		return nil
-	}
-	m.store.EachQueue(func(queue storage.Queue) {
-		count := queue.Size()
-		metricName := fmt.Sprintf("jobs.%s.queued.count", queue.Name())
-		m.Client().Count(metricName, int64(count), m.tags, 1)
-		// count=0 will pull exactly 1 job
-		queue.Page(0, 0, func(index int, e []byte) error {
-			var job client.Job
-			if err := json.Unmarshal(e, &job); err != nil {
-				util.Warnf("metrics task unable to unmarshal job data: %v", err)
-				return nil
-			}
-			t, err := util.ParseTime(job.EnqueuedAt)
-			if err != nil {
-				util.Warnf("metrics task unable to parse EnqueuedAt: %v", err)
-				return nil
-			}
-			metricName := fmt.Sprintf("jobs.%s.queued.time", job.Queue)
-			timeElapsed := time.Duration(time.Now().Sub(t)).Milliseconds()
-			m.Client().Gauge(metricName, float64(timeElapsed), m.tags, 1)
-			return nil
-		})
-
-	})
-
-	return nil
-}
-
-func (s *metrics) Stats() map[string]interface{} {
-	// no stats
-	return map[string]interface{}{}
 }

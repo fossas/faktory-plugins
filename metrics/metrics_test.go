@@ -7,31 +7,40 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/contribsys/faktory/cli"
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/server"
+	"github.com/contribsys/faktory/util"
 	"github.com/fossas/faktory-plugins/metrics/mocks"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 )
 
 const (
-	validStatsdConfig = `
+	enabledStatsdConfig = `
 	[metrics]
-	statsd_server = "localhost:1000"
+	enabled = true
+	tags = ["tag1:value1", "tag2:value2"]
+	namespace = "test"
 	`
-	invalidStatsdConfig = `
+
+	disabledStatsdConfig = `
 	[metrics]
-	statsd_server = 1
+	enabled = false
+	tags = ["tag1:value1", "tag2:value2"]
+	`
+
+	statsdConfig = `
+	[metrics]
+	enabled = true
+	tags = ["tag1:value1", "tag2:value2"]
 	`
 )
 
 func createConfigDir(t *testing.T) string {
-
 	tmpDir := t.TempDir()
 	os.Mkdir(fmt.Sprintf("%s/conf.d", tmpDir), os.FileMode(0777))
 	return tmpDir
@@ -40,86 +49,86 @@ func createConfigDir(t *testing.T) string {
 func TestMetrics(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
+	os.Setenv("DD_AGENT_HOST", "localhost")
+
+	t.Run("no configuration", func(t *testing.T) {
+		system := new(MetricsSubsystem)
+		configDir := createConfigDir(t)
+		runSystem(configDir, func(server *server.Server, cl *client.Client) {
+			err := system.Start(server)
+			assert.EqualError(t, err, "No [metrics] configuration found, plugin cannot start")
+		})
+	})
+	t.Run("plugin is enabled", func(t *testing.T) {
+		system := new(MetricsSubsystem)
+		configDir := createConfigDir(t)
+		confgFile := fmt.Sprintf("%s/conf.d/statsd.toml", configDir)
+		if err := ioutil.WriteFile(confgFile, []byte(enabledStatsdConfig), os.FileMode(0444)); err != nil {
+			panic(err)
+		}
+		runSystem(configDir, func(server *server.Server, cl *client.Client) {
+			err := system.Start(server)
+			assert.Nil(t, err)
+			assert.True(t, system.Options.Enabled)
+			assert.Equal(t, "test", system.Options.Namespace)
+			assert.Equal(t, []string{"tag1:value1", "tag2:value2"}, system.Options.Tags)
+			assert.NotNil(t, system.statsDClient)
+		})
+	})
+	t.Run("plugin is disabled", func(t *testing.T) {
+		system := new(MetricsSubsystem)
+		configDir := createConfigDir(t)
+		confgFile := fmt.Sprintf("%s/conf.d/statsd.toml", configDir)
+		if err := ioutil.WriteFile(confgFile, []byte(disabledStatsdConfig), os.FileMode(0444)); err != nil {
+			panic(err)
+		}
+		runSystem(configDir, func(server *server.Server, cl *client.Client) {
+			err := system.Start(server)
+			assert.Nil(t, err)
+			assert.False(t, system.Options.Enabled)
+			assert.Nil(t, system.statsDClient)
+		})
+	})
 
 	mockDoer := mocks.NewMockClientInterface(mockCtrl)
-
-	t.Run("statsd_server is invalid", func(t *testing.T) {
+	t.Run("Metrics are collected in the middleware", func(t *testing.T) {
 		system := new(MetricsSubsystem)
 		configDir := createConfigDir(t)
 		confgFile := fmt.Sprintf("%s/conf.d/statsd.toml", configDir)
-		if err := ioutil.WriteFile(confgFile, []byte(invalidStatsdConfig), os.FileMode(0444)); err != nil {
+		if err := ioutil.WriteFile(confgFile, []byte(statsdConfig), os.FileMode(0444)); err != nil {
 			panic(err)
 		}
 		runSystem(configDir, func(server *server.Server, cl *client.Client) {
 			system.Server = server
 			system.Options = system.getOptions(server)
-			err := system.connectStatsd()
-			assert.EqualError(t, err, "statsd server not configured")
-		})
-	})
-	t.Run("configuration is valid", func(t *testing.T) {
-		system := new(MetricsSubsystem)
-		configDir := createConfigDir(t)
-		confgFile := fmt.Sprintf("%s/conf.d/statsd.toml", configDir)
-		if err := ioutil.WriteFile(confgFile, []byte(validStatsdConfig), os.FileMode(0444)); err != nil {
-			panic(err)
-		}
-		runSystem(configDir, func(server *server.Server, cl *client.Client) {
-			system.Server = server
-			system.Options = system.getOptions(server)
-			err := system.connectStatsd()
-			assert.Nil(t, err)
-			assert.NotNil(t, system.statsdClient)
-
-		})
-	})
-	t.Run("Reload reloads the config", func(t *testing.T) {
-		system := new(MetricsSubsystem)
-		configDir := createConfigDir(t)
-		confgFile := fmt.Sprintf("%s/conf.d/statsd.toml", configDir)
-		runSystem(configDir, func(server *server.Server, cl *client.Client) {
-			system.Server = server
-			system.Options = system.getOptions(server)
-			server.Register(system)
-			assert.Equal(t, system.Options.statsdServer, "")
-			if err := ioutil.WriteFile(confgFile, []byte(validStatsdConfig), os.FileMode(0444)); err != nil {
-				panic(err)
-			}
-			syscall.Kill(syscall.Getpid(), syscall.SIGHUP)
-			time.Sleep(1 * time.Second)
-
-			assert.Equal(t, system.Options.statsdServer, "localhost:1000")
-		})
-	})
-	t.Run("Metrics are collected", func(t *testing.T) {
-		system := new(MetricsSubsystem)
-		configDir := createConfigDir(t)
-
-		runSystem(configDir, func(server *server.Server, cl *client.Client) {
-			system.Server = server
-			system.Options = system.getOptions(server)
-			system.statsdClient = mockDoer
+			system.statsDClient = mockDoer
 			system.addMiddleware()
 
+			// middleware jobs
+			tags := []string{"tag1:value1", "tag2:value2"}
 			mockDoer.EXPECT().Incr("jobs.succeeded.count", gomock.Any(), gomock.Any()).Return(nil).Times(3)
 			mockDoer.EXPECT().Timing("jobs.succeeded.time", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(3)
-			mockDoer.EXPECT().Incr("jobs.failed.count", gomock.Any(), gomock.Any()).Return(nil).Times(3)
-			mockDoer.EXPECT().Timing("jobs.failed.time", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(4)
-			mockDoer.EXPECT().Count("jobs.default.queued.count", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
-			mockDoer.EXPECT().Gauge("jobs.default.queued.time", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
-			mockDoer.EXPECT().Count("jobs.builds.queued.count", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
-			mockDoer.EXPECT().Gauge("jobs.builds.queued.time", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
-			mockDoer.EXPECT().Count("jobs.tests.queued.count", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
-			mockDoer.EXPECT().Gauge("jobs.tests.queued.time", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Incr("jobs.failed.count", gomock.Any(), gomock.Any()).Return(nil).Times(2)
+			mockDoer.EXPECT().Timing("jobs.failed.time", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(3)
 
-			mockDoer.EXPECT().Incr("jobs.retried_at_least_once.count", gomock.Any(), gomock.Any()).Return(nil).Times(1)
-			mockDoer.EXPECT().Count("jobs.retry.queued.count", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
-			mockDoer.EXPECT().Gauge("jobs.retry.queued.time", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			// task calls
+			mockDoer.EXPECT().Count("jobs.working.count", int64(0), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Count("jobs.scheduled.count", int64(1), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Count("jobs.retries.count", int64(1), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Count("jobs.dead.count", int64(0), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Count("jobs.enqueued.count", int64(8), tags, gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Count("jobs.enqueued.default.count", int64(1), tags, gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("jobs.enqueued.default.time", gomock.Any(), tags, gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Count("jobs.enqueued.builds.count", int64(6), tags, gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("jobs.enqueued.builds.time", gomock.Any(), tags, gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Count("jobs.enqueued.tests.count", int64(1), tags, gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("jobs.enqueued.tests.time", gomock.Any(), tags, gomock.Any()).Return(nil).Times(1)
 
+			// create 15 jobs
+			// default queue
 			if err := cl.Push(createJob("default", "Scan", 1)); err != nil {
 				panic(err)
 			}
-
 			if err := cl.Push(createJob("default", "Scan", 2)); err != nil {
 				panic(err)
 			}
@@ -130,6 +139,7 @@ func TestMetrics(t *testing.T) {
 				panic(err)
 			}
 
+			// 8 builds queue
 			if err := cl.Push(createJob("builds", "ProvidedBuild", 2)); err != nil {
 				panic(err)
 			}
@@ -155,34 +165,35 @@ func TestMetrics(t *testing.T) {
 				panic(err)
 			}
 
-			if err := cl.Push(createJob("tests", "Test", 1)); err != nil {
+			// 3 test queue
+			job := createJob("tests", "Test", 1)
+			job.Retry = 3
+			if err := cl.Push(job); err != nil {
 				panic(err)
 			}
-			if err := cl.Push(createJob("tests", "Test", 2)); err != nil {
+
+			job2 := createJob("tests", "Test", 2)
+			job2.At = time.Now().Add(10 * time.Hour).Format(util.TimestampFormat)
+			if err := cl.Push(job2); err != nil {
 				panic(err)
 			}
 			if err := cl.Push(createJob("tests", "Test", 3)); err != nil {
 				panic(err)
 			}
 
-			job := client.NewJob("retry", 1)
-			job.Retry = 2
-			job.Queue = "retry"
-			cl.Push(job)
-
-			time.Sleep(1 * time.Second)
+			// process 3 jobs
 			processJob("default", cl, true, nil)
 			processJob("default", cl, true, nil)
 			processJob("builds", cl, true, nil)
 
+			// fail 3 jobs
 			processJob("default", cl, false, nil)
+			server.Manager().RetryJobs(time.Now().Add(-60 * time.Second))
 			processJob("builds", cl, false, nil)
 			processJob("tests", cl, false, nil)
 
-			m := &metrics{server.Store(), system.Client, 1, []string{}}
+			m := &metricsTask{system}
 			m.Execute()
-
-			processJob("retry", cl, false, nil)
 		})
 	})
 }
