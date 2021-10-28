@@ -2,7 +2,6 @@ package cron
 
 import (
 	"encoding/json"
-	"time"
 
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/util"
@@ -20,7 +19,6 @@ type QueueJob struct {
 // Runs - creates a new faktory job and enqueues it
 func (c *QueueJob) Run() {
 	var job client.Job
-	time.Sleep(45 * time.Second)
 	err := json.Unmarshal(c.job.faktoryJob, &job)
 	if err != nil {
 		util.Warnf("parseCronJob: unable to unmarshal job: %v", err)
