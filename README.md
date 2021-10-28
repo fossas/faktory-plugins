@@ -42,6 +42,35 @@ Tags can also be set the with env variable `DD_TAGS="tagName:value,tagName:value
 
 specify the host with `DD_AGENT_HOST`
 
+### Cron
+
+Enables enqueueing of jobs with a cron format
+
+### Configuration
+
+```
+[cron_plugin]
+  enabled = true
+[[ cron ]]
+schedule = "*/5 * * * *"
+  [cron.job]
+    type = "JobType"
+    queue = "queue"
+    retry = 3
+    [cron.job.custom]
+      value = true
+[[ cron ]]
+schedule = "3 * * * * * * *" # quartz format
+  [cron.job]
+    type = "OtherJob"
+    queue = "queue"
+    retry = 3
+    [cron.job.custom]
+      value = true
+```
+
+schedule can be in quarts format (http://www.quartz-scheduler.org/documentation/quartz-2.3.0/tutorials/crontrigger.html), which includes seconds
+
 ## License
 
 All code in this repository is licensed under the AGPL.
