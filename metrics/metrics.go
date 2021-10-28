@@ -36,10 +36,6 @@ type Options struct {
 // get options from global config "[metrics]"
 //
 func (m *MetricsSubsystem) Start(s *server.Server) error {
-	if _, ok := s.Options.GlobalConfig["metrics"]; !ok {
-		return fmt.Errorf("No [metrics] configuration found, plugin cannot start")
-	}
-
 	m.Server = s
 	m.Options = m.getOptions(s)
 

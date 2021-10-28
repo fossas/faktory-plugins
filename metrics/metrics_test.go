@@ -56,7 +56,8 @@ func TestMetrics(t *testing.T) {
 		configDir := createConfigDir(t)
 		runSystem(configDir, func(server *server.Server, cl *client.Client) {
 			err := system.Start(server)
-			assert.EqualError(t, err, "No [metrics] configuration found, plugin cannot start")
+			assert.Nil(t, err)
+			assert.False(t, system.Options.Enabled)
 		})
 	})
 	t.Run("plugin is enabled", func(t *testing.T) {
