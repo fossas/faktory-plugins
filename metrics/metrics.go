@@ -61,7 +61,7 @@ func (m *MetricsSubsystem) Name() string {
 }
 
 // Reload - the config is reloaded by faktory
-// update the plugin and re-create dogstatsd client if needed
+// hot reload is currently unsupported
 func (m *MetricsSubsystem) Reload(s *server.Server) error {
 	return nil
 }
