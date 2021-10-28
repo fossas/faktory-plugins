@@ -81,7 +81,6 @@ func (m *MetricsSubsystem) StatsDClient() statsd.ClientInterface {
 }
 
 // PrefixMetricName - adds configured namespace to the metric
-
 func (m *MetricsSubsystem) PrefixMetricName(metricName string) string {
 	return fmt.Sprintf("%s.%s", m.Options.Namespace, metricName)
 }
@@ -122,7 +121,7 @@ func (m *MetricsSubsystem) createStatsDClient() error {
 		}
 	}
 
-	// passing "" uses env
+	// when passing "", dogStatsD will use env DD_AGENT_HOST (and DD_TRACE_AGENT_PORT if set or defaults to 8126)
 	statsDClient, err := statsd.New("", statsd.WithTags(tags))
 	if err != nil {
 		return fmt.Errorf("unable to create statsd client: %v", err)
