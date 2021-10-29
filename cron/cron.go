@@ -147,7 +147,6 @@ func (c *CronSubsystem) getOptions(s *server.Server) (*Options, error) {
 		for _, cronJobInterface := range cronJobsInterface {
 			cronJob, err := c.parseCronJob(cronJobInterface)
 			if err != nil {
-				util.Warnf("uhoh %v", err)
 				return &options, fmt.Errorf("getOptions unable to parse cronjob: %v", err)
 			}
 			cronJobs = append(cronJobs, cronJob)
