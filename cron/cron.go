@@ -52,23 +52,12 @@ func (c *CronSubsystem) Start(s *server.Server) error {
 		return nil
 	}
 
-	c.Cron = cron.New(cron.WithParser(cron.NewParser(
-		cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor,
-	)))
+	c.createCron()
 
-	for _, job := range c.Options.CronJobs {
-		id, err := c.Cron.AddJob(job.Schedule, &QueueJob{
-			Subsystem: c,
-			job:       &job,
-		})
-
-		if err != nil {
-			util.Warnf("Unable to start cron plugin: %v", err)
-			return fmt.Errorf("Unable to start cron plugin: %v", err)
-		}
-		job.EntryId = id
+	if err := c.addCronJobs(); err != nil {
+		return fmt.Errorf("Reload: cannot add cron jobs: %v", err)
 	}
-	c.Cron.Start()
+
 	util.Infof("Started cron plugin, registered %d jobs", len(c.Options.CronJobs))
 	go func() {
 		// wait for signal and stop cron
@@ -84,8 +73,57 @@ func (c *CronSubsystem) Name() string {
 }
 
 // Reload - the config is reloaded by faktory
-// hot reload is currently unsupported
+// remove any exist cron jobs and load new ones from the config
 func (c *CronSubsystem) Reload(s *server.Server) error {
+	options, err := c.getOptions(s)
+	// only throw an error if the config is invalid and the plugin is enabled
+	if err != nil && c.Options.Enabled {
+		return fmt.Errorf("Error parsing config: %v", err)
+	}
+
+	if c.Cron == nil {
+		c.createCron()
+	} else {
+		entries := c.Cron.Entries()
+		for _, entry := range entries {
+			c.Cron.Remove(entry.ID)
+		}
+	}
+
+	c.Options = options
+	if !c.Options.Enabled {
+		return nil
+	}
+
+	if err := c.addCronJobs(); err != nil {
+		return fmt.Errorf("Reload: cannot add cron jobs: %v", err)
+	}
+	return nil
+}
+
+func (c *CronSubsystem) createCron() {
+	c.Cron = cron.New(cron.WithParser(cron.NewParser(
+		cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor,
+	)))
+}
+
+func (c *CronSubsystem) addCronJobs() error {
+	for index, job := range c.Options.CronJobs {
+		id, err := c.Cron.AddJob(job.Schedule, &QueueJob{
+			Subsystem: c,
+			job:       &job,
+		})
+
+		if err != nil {
+			util.Warnf("Unable to start cron plugin: %v", err)
+			return fmt.Errorf("Unable to start cron plugin: %v", err)
+		}
+		c.Options.CronJobs[index].EntryId = id
+	}
+
+	// starts cron if not already running
+	c.Cron.Start()
+
 	return nil
 }
 

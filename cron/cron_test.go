@@ -56,6 +56,7 @@ func TestCron(t *testing.T) {
 			assert.Nil(t, system.Cron)
 		})
 	})
+
 	t.Run("plugin is disabled", func(t *testing.T) {
 		system := new(CronSubsystem)
 		configDir := createConfigDir(t)
@@ -83,9 +84,54 @@ func TestCron(t *testing.T) {
 			assert.Nil(t, err)
 			assert.True(t, system.Options.Enabled)
 			assert.Len(t, system.Options.CronJobs, 2)
+			assert.Len(t, system.Cron.Entries(), 2)
 			for _, job := range system.Options.CronJobs {
+				fmt.Println(job.EntryId)
 				assert.NotNil(t, job.EntryId)
 			}
+		})
+	})
+
+	t.Run("reload removes old jobs", func(t *testing.T) {
+		system := new(CronSubsystem)
+		configDir := createConfigDir(t)
+		confgFile := fmt.Sprintf("%s/conf.d/cron.toml", configDir)
+		if err := ioutil.WriteFile(confgFile, []byte(enabledConfig), os.FileMode(0444)); err != nil {
+			panic(err)
+		}
+		runSystem(configDir, func(s *server.Server) {
+			err := system.Start(s)
+			assert.Nil(t, err)
+			cronConfig := []map[string]interface{}{}
+			s.Options.GlobalConfig["cron"] = cronConfig
+			system.Reload(s)
+			assert.Len(t, system.Options.CronJobs, 0)
+			assert.Len(t, system.Cron.Entries(), 0)
+		})
+	})
+
+	t.Run("reload adds new ones", func(t *testing.T) {
+		system := new(CronSubsystem)
+		configDir := createConfigDir(t)
+		runSystem(configDir, func(s *server.Server) {
+			err := system.Start(s)
+			assert.Nil(t, err)
+			s.Options.GlobalConfig["cron_plugin"] = map[string]interface{}{
+				"enabled": true,
+			}
+
+			cronJob := map[string]interface{}{
+				"schedule": "* * * * *",
+				"job": map[string]interface{}{
+					"type": "test_job",
+				},
+			}
+			cronConfig := []map[string]interface{}{cronJob}
+			s.Options.GlobalConfig["cron"] = cronConfig
+			system.Reload(s)
+			assert.Len(t, system.Options.CronJobs, 1)
+			assert.Len(t, system.Cron.Entries(), 1)
+			assert.Equal(t, system.Options.CronJobs[0].EntryId, system.Cron.Entries()[0].ID)
 		})
 	})
 }
