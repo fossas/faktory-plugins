@@ -88,6 +88,7 @@ Day of week  | Yes        | 0-6 or SUN-SAT  | * / , - ?
 
 
 Predefined schedules
+
 You may use one of several pre-defined schedules in place of a cron expression.
 
 Entry                  | Description                                | Equivalent To
@@ -99,9 +100,11 @@ Entry                  | Description                                | Equivalent
 @hourly                | Run once an hour, beginning of hour        | 0 0 * * * *
 
 Intervals
+
 You may also schedule a job to execute at fixed intervals, starting at the time it's added or cron is run. This is supported by formatting the cron spec like this:
 
-@every <duration>
+`@every <duration>`
+
 where "duration" is a string accepted by time.ParseDuration (http://golang.org/pkg/time/#ParseDuration).
 
 
