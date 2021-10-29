@@ -69,7 +69,41 @@ schedule = "3 * * * * * * *" # quartz format
       value = true
 ```
 
-schedule can be in quarts format (http://www.quartz-scheduler.org/documentation/quartz-2.3.0/tutorials/crontrigger.html), which includes seconds
+schedule can be in quarts format (http://www.quartz-scheduler.org/documentation/quartz-2.3.0/tutorials/crontrigger.html), which has an optional first parameter for seconds
+
+each `[[ cron ]]` entry must have:
+`schedule`: a cron express, predefined schedule or intervals
+`type`: Faktory Job type to be queued
+
+### Cron expressions
+
+ Field name   | Mandatory? | Allowed values  | Allowed special characters
+----------   | ---------- | --------------  | --------------------------
+Seconds      | Yes        | 0-59            | * / , -
+Minutes      | Yes        | 0-59            | * / , -
+Hours        | Yes        | 0-23            | * / , -
+Day of month | Yes        | 1-31            | * / , - ?
+Month        | Yes        | 1-12 or JAN-DEC | * / , -
+Day of week  | Yes        | 0-6 or SUN-SAT  | * / , - ?
+
+
+Predefined schedules
+You may use one of several pre-defined schedules in place of a cron expression.
+
+Entry                  | Description                                | Equivalent To
+-----                  | -----------                                | -------------
+@yearly (or @annually) | Run once a year, midnight, Jan. 1st        | 0 0 0 1 1 *
+@monthly               | Run once a month, midnight, first of month | 0 0 0 1 * *
+@weekly                | Run once a week, midnight between Sat/Sun  | 0 0 0 * * 0
+@daily (or @midnight)  | Run once a day, midnight                   | 0 0 0 * * *
+@hourly                | Run once an hour, beginning of hour        | 0 0 * * * *
+
+Intervals
+You may also schedule a job to execute at fixed intervals, starting at the time it's added or cron is run. This is supported by formatting the cron spec like this:
+
+@every <duration>
+where "duration" is a string accepted by time.ParseDuration (http://golang.org/pkg/time/#ParseDuration).
+
 
 ## License
 
