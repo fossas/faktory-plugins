@@ -38,9 +38,9 @@ namespace = "jobs" # changes the prefix for the metric from `jobs.` to the value
 tags = ["tag1:value1", "tag2:value2"] # tags passed to datadog on every metric
 ```
 
-Tags can also be set the with env variable `DD_TAGS="tagName:value,tagName:value"
+Tags can also be set the with env variable `DD_TAGS="tagName:value,tagName:value"`
 
-specify the host with `DD_AGENT_HOST`
+Specify the host with `DD_AGENT_HOST`
 
 ### Cron
 
@@ -69,10 +69,10 @@ schedule = "3 * * * * * * *" # quartz format
       value = true
 ```
 
-schedule can be in quarts format (http://www.quartz-scheduler.org/documentation/quartz-2.3.0/tutorials/crontrigger.html), which has an optional first parameter for seconds
+Each `[[ cron ]]` entry must have:
 
-each `[[ cron ]]` entry must have:
 `schedule`: a cron express, predefined schedule or intervals
+
 `type`: Faktory Job type to be queued
 
 ### Cron expressions
