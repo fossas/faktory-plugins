@@ -45,7 +45,7 @@ func (c *CronSubsystem) Start(s *server.Server) error {
 	// only throw an error if the config is invalid and the plugin is enabled
 	c.Options = options
 	if err != nil && c.Options.Enabled {
-		return fmt.Errorf("Error parsing config: %v", err)
+		return fmt.Errorf("Start: Error parsing config: %v", err)
 	}
 
 	if !c.Options.Enabled {
@@ -55,7 +55,7 @@ func (c *CronSubsystem) Start(s *server.Server) error {
 	c.createCron()
 
 	if err := c.addCronJobs(); err != nil {
-		return fmt.Errorf("Reload: cannot add cron jobs: %v", err)
+		return fmt.Errorf("Start: cannot add cron jobs: %v", err)
 	}
 
 	util.Infof("Started cron plugin, registered %d jobs", len(c.Options.CronJobs))
@@ -78,7 +78,7 @@ func (c *CronSubsystem) Reload(s *server.Server) error {
 	options, err := c.getOptions(s)
 	// only throw an error if the config is invalid and the plugin is enabled
 	if err != nil && c.Options.Enabled {
-		return fmt.Errorf("Error parsing config: %v", err)
+		return fmt.Errorf("Reload: Error parsing config: %v", err)
 	}
 
 	if c.Cron == nil {
@@ -116,7 +116,7 @@ func (c *CronSubsystem) addCronJobs() error {
 
 		if err != nil {
 			util.Warnf("Unable to start cron plugin: %v", err)
-			return fmt.Errorf("Unable to start cron plugin: %v", err)
+			return fmt.Errorf("createCron: Unable to start cron plugin: %v", err)
 		}
 		c.Options.CronJobs[index].EntryId = id
 	}

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/contribsys/faktory/cli"
@@ -72,6 +71,92 @@ func TestCron(t *testing.T) {
 		})
 	})
 
+	t.Run("invalid cron job", func(t *testing.T) {
+		system := new(CronSubsystem)
+		configDir := createConfigDir(t)
+		runSystem(configDir, func(s *server.Server) {
+			s.Options.GlobalConfig["cron_plugin"] = map[string]interface{}{
+				"enabled": true,
+			}
+
+			cronJob := map[string]interface{}{
+				"schedule": "*",
+				"job": map[string]interface{}{
+					"type": "test_job",
+				},
+			}
+			cronConfig := []map[string]interface{}{cronJob}
+			s.Options.GlobalConfig["cron"] = cronConfig
+			err := system.Start(s)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "Unable to start cron plugin")
+		})
+		runSystem(configDir, func(s *server.Server) {
+			s.Options.GlobalConfig["cron_plugin"] = map[string]interface{}{
+				"enabled": true,
+			}
+
+			cronJob := map[string]interface{}{
+				"job": map[string]interface{}{
+					"type": "test_job",
+				},
+			}
+			cronConfig := []map[string]interface{}{cronJob}
+			s.Options.GlobalConfig["cron"] = cronConfig
+			err := system.Start(s)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "schedule missing from cronjob")
+		})
+		runSystem(configDir, func(s *server.Server) {
+			s.Options.GlobalConfig["cron_plugin"] = map[string]interface{}{
+				"enabled": true,
+			}
+
+			cronJob := map[string]interface{}{
+				"schedule": "* * * * * *",
+			}
+			cronConfig := []map[string]interface{}{cronJob}
+			s.Options.GlobalConfig["cron"] = cronConfig
+			err := system.Start(s)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "job missing from cronjob")
+		})
+		runSystem(configDir, func(s *server.Server) {
+			s.Options.GlobalConfig["cron_plugin"] = map[string]interface{}{
+				"enabled": true,
+			}
+
+			cronJob := map[string]interface{}{
+				"schedule": "* * * * * *",
+				"job": map[string]interface{}{
+					"queue": "Test",
+				},
+			}
+			cronConfig := []map[string]interface{}{cronJob}
+			s.Options.GlobalConfig["cron"] = cronConfig
+			err := system.Start(s)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "type is required")
+		})
+		runSystem(configDir, func(s *server.Server) {
+			s.Options.GlobalConfig["cron_plugin"] = map[string]interface{}{
+				"enabled": true,
+			}
+
+			cronJob := map[string]interface{}{
+				"schedule": "* * * * * *",
+				"job": map[string]interface{}{
+					"type": 1,
+				},
+			}
+			cronConfig := []map[string]interface{}{cronJob}
+			s.Options.GlobalConfig["cron"] = cronConfig
+			err := system.Start(s)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "arseCronJob: unable to unmarshal job")
+		})
+	})
+
 	t.Run("jobs are added to cron", func(t *testing.T) {
 		system := new(CronSubsystem)
 		configDir := createConfigDir(t)
@@ -86,7 +171,6 @@ func TestCron(t *testing.T) {
 			assert.Len(t, system.Options.CronJobs, 2)
 			assert.Len(t, system.Cron.Entries(), 2)
 			for _, job := range system.Options.CronJobs {
-				fmt.Println(job.EntryId)
 				assert.NotNil(t, job.EntryId)
 			}
 		})
@@ -134,10 +218,6 @@ func TestCron(t *testing.T) {
 			assert.Equal(t, system.Options.CronJobs[0].EntryId, system.Cron.Entries()[0].ID)
 		})
 	})
-}
-
-func handleError(err error) {
-	fmt.Println(strings.Replace(err.Error(), "\n", "", -1))
 }
 
 func runSystem(configDir string, runner func(s *server.Server)) {
