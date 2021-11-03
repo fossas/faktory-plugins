@@ -18,11 +18,22 @@ import (
 // it follows the spec found at: https://github.com/contribsys/faktory/wiki/Ent-Unique-Jobs
 type UniqSubsystem struct {
 	Server *server.Server
+	// uniq plugin options
+	Options *Options
+}
+
+type Options struct {
+	// whether or not to enable the plugin
+	Enabled bool
 }
 
 // starts the subsystem and adds the needed middleware
 func (u *UniqSubsystem) Start(s *server.Server) error {
 	u.Server = s
+	u.Options = u.getOptions(s)
+	if !u.Options.Enabled {
+		return nil
+	}
 	u.addMiddleware()
 	util.Info("Unique subsystem started")
 	return nil
@@ -41,6 +52,17 @@ func (u *UniqSubsystem) Reload(s *server.Server) error {
 // shutdown - nothing needs to be done but the function must exist for subsystems
 func (u *UniqSubsystem) Shutdown(s *server.Server) error {
 	return nil
+}
+
+func (u *UniqSubsystem) getOptions(s *server.Server) *Options {
+	enabledValue := s.Options.Config("uniq", "enabled", false)
+	enabled, ok := enabledValue.(bool)
+	if !ok {
+		enabled = false
+	}
+	return &Options{
+		Enabled: enabled,
+	}
 }
 
 func (u *UniqSubsystem) addMiddleware() {
