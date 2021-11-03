@@ -15,7 +15,7 @@ import (
 
 func TestBatchSuccess(t *testing.T) {
 	batchSystem := new(BatchSubsystem)
-	withServer(batchSystem, func(cl *client.Client) {
+	withServer(batchSystem, true, func(cl *client.Client) {
 		b := client.NewBatch(cl)
 
 		b.Complete = client.NewJob("batchDone", 1, "string", 3)
@@ -78,7 +78,7 @@ func TestBatchSuccess(t *testing.T) {
 
 func TestBatchComplete(t *testing.T) {
 	batchSystem := new(BatchSubsystem)
-	withServer(batchSystem, func(cl *client.Client) {
+	withServer(batchSystem, true, func(cl *client.Client) {
 		b := client.NewBatch(cl)
 
 		b.Complete = client.NewJob("batchDone", 1, "string", 3)
@@ -131,7 +131,7 @@ func TestBatchComplete(t *testing.T) {
 
 func TestBatchReopen(t *testing.T) {
 	batchSystem := new(BatchSubsystem)
-	withServer(batchSystem, func(cl *client.Client) {
+	withServer(batchSystem, true, func(cl *client.Client) {
 		b := client.NewBatch(cl)
 
 		b.Success = client.NewJob("batchSuccess", 2, "string", 4)
@@ -182,7 +182,7 @@ func TestBatchReopen(t *testing.T) {
 
 func TestBatchCannotOpen(t *testing.T) {
 	batchSystem := new(BatchSubsystem)
-	withServer(batchSystem, func(cl *client.Client) {
+	withServer(batchSystem, true, func(cl *client.Client) {
 		b := client.NewBatch(cl)
 
 		b.Success = client.NewJob("batchSuccess", 2, "string", 4)
@@ -212,7 +212,7 @@ func TestBatchCannotOpen(t *testing.T) {
 
 func TestBatchInvalidWorkerOpen(t *testing.T) {
 	batchSystem := new(BatchSubsystem)
-	withServer(batchSystem, func(cl *client.Client) {
+	withServer(batchSystem, true, func(cl *client.Client) {
 		otherClient, err := getClient()
 		if err != nil {
 			panic(err)
@@ -243,7 +243,7 @@ func TestBatchInvalidWorkerOpen(t *testing.T) {
 
 func TestBatchLoadBatches(t *testing.T) {
 	batchSystem := new(BatchSubsystem)
-	withServer(batchSystem, func(cl *client.Client) {
+	withServer(batchSystem, true, func(cl *client.Client) {
 		b := client.NewBatch(cl)
 
 		b.Success = client.NewJob("batchSuccess", 2, "string", 4)
@@ -279,7 +279,15 @@ func TestBatchLoadBatches(t *testing.T) {
 	})
 }
 
-func withServer(batchSystem *BatchSubsystem, runner func(cl *client.Client)) {
+func TestBatchOptions(t *testing.T) {
+	batchSystem := new(BatchSubsystem)
+	withServer(batchSystem, false, func(cl *client.Client) {
+		assert.False(t, batchSystem.Options.Enabled)
+		assert.Nil(t, batchSystem.Server)
+	})
+}
+
+func withServer(batchSystem *BatchSubsystem, enabled bool, runner func(cl *client.Client)) {
 	dir := "/tmp/batching_system.db"
 	defer os.RemoveAll(dir)
 	opts := &cli.CliOptions{"localhost:7418", "localhost:7420", "development", ".", "debug", dir}
@@ -296,6 +304,10 @@ func withServer(batchSystem *BatchSubsystem, runner func(cl *client.Client)) {
 	err = s.Boot()
 	if err != nil {
 		panic(err)
+	}
+
+	s.Options.GlobalConfig["batch"] = map[string]interface{}{
+		"enabled": enabled,
 	}
 
 	s.Register(batchSystem)

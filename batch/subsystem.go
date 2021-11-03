@@ -22,6 +22,7 @@ type BatchSubsystem struct {
 	Batches map[string]*batch
 	mu      sync.Mutex
 	Fetcher manager.Fetcher
+	Options *Options
 }
 
 // NewBatchRequest structure for a new batch request
@@ -34,8 +35,17 @@ type NewBatchRequest struct {
 	Complete    *client.Job `json:"complete,omitempty"`
 }
 
+type Options struct {
+	// Enabled - toggle for enabling the plugin
+	Enabled bool
+}
+
 // Start - configures the batch subsystem
 func (b *BatchSubsystem) Start(s *server.Server) error {
+	b.Options = b.getOptions(s)
+	if !b.Options.Enabled {
+		return nil
+	}
 	b.Server = s
 	b.mu = sync.Mutex{}
 	b.Batches = make(map[string]*batch)
@@ -54,9 +64,20 @@ func (b *BatchSubsystem) Name() string {
 	return "Batch"
 }
 
-// Reload does not do anything but is required by Faktory for subsystems
+// Reload does not do anything
 func (b *BatchSubsystem) Reload(s *server.Server) error {
 	return nil
+}
+
+func (b *BatchSubsystem) getOptions(s *server.Server) *Options {
+	enabledValue := s.Options.Config("batch", "enabled", false)
+	enabled, ok := enabledValue.(bool)
+	if !ok {
+		enabled = false
+	}
+	return &Options{
+		Enabled: enabled,
+	}
 }
 
 func (b *BatchSubsystem) addMiddleware() {
