@@ -278,10 +278,10 @@ func (b *batch) isBatchDone() bool {
 
 func (b *batch) checkBatchDone() {
 	if b.isBatchDone() {
-		if b.Meta.CompleteJob != "" {
+		if b.Meta.CompleteJob != "" && b.Meta.CompleteJobState == CallbackJobPending {
 			b.queueBatchDoneJob(b.Meta.CompleteJob, "complete")
 		}
-		if b.Meta.Succeeded == b.Meta.Total && b.Meta.SuccessJob != "" {
+		if b.Meta.Succeeded == b.Meta.Total && b.Meta.SuccessJob != "" && b.Meta.SuccessJobState == CallbackJobPending {
 			b.queueBatchDoneJob(b.Meta.SuccessJob, "success")
 		}
 	}
