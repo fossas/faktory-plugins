@@ -76,7 +76,7 @@ func TestBatchSuccess(t *testing.T) {
 	})
 }
 
-func TestBatchComplete(t *testing.T) {
+func TestBatchCompleteAndEventualSuccess(t *testing.T) {
 	batchSystem := new(BatchSubsystem)
 	withServer(batchSystem, true, func(cl *client.Client) {
 		b := client.NewBatch(cl)
@@ -87,7 +87,9 @@ func TestBatchComplete(t *testing.T) {
 		err := b.Jobs(func() error {
 			err := b.Push(client.NewJob("JobOne", 1))
 			assert.Nil(t, err)
-			err = b.Push(client.NewJob("JobTwo", 2))
+			jobTwo := client.NewJob("JobTwo", 2)
+			jobTwo.Retry = 2
+			err = b.Push(jobTwo)
 			assert.Nil(t, err)
 			return nil
 		})
@@ -98,6 +100,7 @@ func TestBatchComplete(t *testing.T) {
 		batchData, err := batchSystem.getBatch(b.Bid)
 		assert.Nil(t, err)
 		assert.Equal(t, 2, batchData.Meta.Total)
+		assert.Equal(t, 2, batchData.Meta.Pending)
 
 		// job one
 		err = processJob(cl, true, func(job *client.Job) {
@@ -106,6 +109,7 @@ func TestBatchComplete(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, 1, batchData.Meta.Succeeded)
 		assert.False(t, batchData.isBatchDone())
+		assert.Equal(t, 1, batchData.Meta.Pending)
 
 		// job two
 		err = processJob(cl, false, func(job *client.Job) {
@@ -116,6 +120,7 @@ func TestBatchComplete(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, 1, batchData.Meta.Succeeded)
 		assert.Equal(t, 1, batchData.Meta.Failed)
+		assert.Equal(t, 0, batchData.Meta.Pending)
 		assert.True(t, batchData.isBatchDone())
 
 		// done job
@@ -125,6 +130,36 @@ func TestBatchComplete(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, "", batchData.Meta.SuccessJobState)
 		fetchedJob, err := cl.Fetch("default")
+		assert.Nil(t, err)
+		assert.Nil(t, fetchedJob)
+
+		_, err = batchSystem.Server.Manager().RetryJobs(time.Now().Add(60 * time.Second))
+		assert.Nil(t, err)
+
+		// job two retry #1 fail
+		err = processJob(cl, false, func(job *client.Job) {
+			assert.Equal(t, "JobTwo", job.Type)
+		})
+		assert.Nil(t, err)
+		assert.Equal(t, 1, batchData.Meta.Succeeded)
+		assert.Equal(t, 2, batchData.Meta.Failed)
+		assert.Equal(t, 0, batchData.Meta.Pending)
+
+		_, err = batchSystem.Server.Manager().RetryJobs(time.Now().Add(60 * time.Second))
+		assert.Nil(t, err)
+
+		// job two retry #2 success
+		err = processJob(cl, true, func(job *client.Job) {
+			assert.Equal(t, "JobTwo", job.Type)
+		})
+		assert.Nil(t, err)
+		assert.Equal(t, 2, batchData.Meta.Succeeded)
+		assert.Equal(t, 2, batchData.Meta.Failed)
+		err = processJob(cl, true, func(job *client.Job) {
+			assert.Equal(t, "batchSuccess", job.Type)
+		})
+		fetchedJob, err = cl.Fetch("default")
+		assert.Nil(t, err)
 		assert.Nil(t, fetchedJob)
 	})
 }

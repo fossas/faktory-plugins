@@ -27,7 +27,7 @@ type BatchSubsystem struct {
 
 // NewBatchRequest structure for a new batch request
 // Success and Complete are jobs to be queued
-// once the batch has been commited and all jobs processed
+// once the batch has been committed and all jobs processed
 type NewBatchRequest struct {
 	//	ParentBid   string      `json:"parent_bid,omitempty"`
 	Description string      `json:"description,omitempty"`
@@ -123,6 +123,7 @@ func (b *BatchSubsystem) newBatchMeta(description string, success string, comple
 		Total:            0,
 		Succeeded:        0,
 		Failed:           0,
+		Pending:          0,
 		Description:      description,
 		SuccessJob:       success,
 		CompleteJob:      complete,
@@ -173,7 +174,7 @@ func (b *BatchSubsystem) getBatch(batchId string) (*batch, error) {
 	}
 	if exists == 0 {
 		b.removeBatch(batch)
-		return nil, fmt.Errorf("getBatch: batch was not commited within 2 hours")
+		return nil, fmt.Errorf("getBatch: batch was not committed within 2 hours")
 	}
 
 	return batch, nil

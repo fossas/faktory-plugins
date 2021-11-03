@@ -99,7 +99,10 @@ func (b *BatchSubsystem) handleJobFinished(success bool) func(next func() error,
 			}
 			util.Infof("Job %s (worker %s) %s for batch %s", ctx.Job().Jid, ctx.Reservation().Wid, status, batch.Id)
 			batch.removeWorkerForJid(ctx.Job().Jid)
-			if err := batch.jobFinished(ctx.Job().Jid, success); err != nil {
+
+			isRetry := ctx.Job().Failure != nil && ctx.Job().Failure.RetryCount > 0
+
+			if err := batch.jobFinished(ctx.Job().Jid, success, isRetry); err != nil {
 				util.Warnf("error processing finished job for batch %v", err)
 				return fmt.Errorf("handleJobFinished: unable to process finished job %s for batch %s", ctx.Job().Jid, batch.Id)
 			}

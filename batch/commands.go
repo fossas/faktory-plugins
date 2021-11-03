@@ -14,7 +14,7 @@ import (
 func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cmd string) {
 	parts := strings.SplitN(cmd, " ", 3)[1:]
 	if len(parts) < 2 {
-		_= c.Error(cmd, errors.New("invalid BATCH command"))
+		_ = c.Error(cmd, errors.New("invalid BATCH command"))
 		return
 	}
 
@@ -127,7 +127,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		data, err := json.Marshal(map[string]interface{}{
 			"bid":          batchId,
 			"total":        batch.Meta.Total,
-			"pending":      batch.Meta.Total - batch.Meta.Failed - batch.Meta.Succeeded,
+			"pending":      batch.Meta.Pending,
 			"description":  batch.Meta.Description,
 			"created_at":   batch.Meta.CreatedAt,
 			"completed_st": CallbackJobPending,

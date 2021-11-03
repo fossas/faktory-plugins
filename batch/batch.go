@@ -38,6 +38,7 @@ const (
 type batchMeta struct {
 	Total            int
 	Failed           int
+	Pending          int
 	Succeeded        int
 	CreatedAt        string
 	Description      string
@@ -75,6 +76,7 @@ func (b *batch) init() error {
 			"total":        b.Meta.Total,
 			"failed":       b.Meta.Failed,
 			"succeeded":    b.Meta.Succeeded,
+			"pending":      b.Meta.Pending,
 			"created_at":   b.Meta.CreatedAt,
 			"description":  b.Meta.Description,
 			"committed":    b.Meta.Committed,
@@ -91,7 +93,6 @@ func (b *batch) init() error {
 	if err != nil {
 		return fmt.Errorf("init: failed converting string to int: %v", err)
 	}
-
 	b.Meta.Failed, err = strconv.Atoi(meta["failed"])
 	if err != nil {
 		return fmt.Errorf("init: failed converting string to int: %v", err)
@@ -100,6 +101,11 @@ func (b *batch) init() error {
 	if err != nil {
 		return fmt.Errorf("init: failed converting string to int: %v", err)
 	}
+	b.Meta.Pending, err = strconv.Atoi(meta["pending"])
+	if err != nil {
+		return fmt.Errorf("init: failed converting string to int: %v", err)
+	}
+
 	b.Meta.Committed, err = strconv.ParseBool(meta["committed"])
 	if err != nil {
 		return fmt.Errorf("init: failed converting string to bool: %v", err)
@@ -144,9 +150,9 @@ func (b *batch) jobQueued(jobId string) error {
 	return nil
 }
 
-func (b *batch) jobFinished(jobId string, success bool) error {
+func (b *batch) jobFinished(jobId string, success bool, isRetry bool) error {
 	b.mu.Lock()
-	if err := b.removeJobFromBatch(jobId, success); err != nil {
+	if err := b.removeJobFromBatch(jobId, success, isRetry); err != nil {
 		return fmt.Errorf("jobFinished: %v", err)
 	}
 	b.mu.Unlock()
@@ -198,20 +204,20 @@ func (b *batch) remove() error {
 	return nil
 }
 
-func (b *batch) updateCommitted(commited bool) error {
-	b.Meta.Committed = commited
-	if err := b.rclient.HSet(b.MetaKey, "commited", commited).Err(); err != nil {
-		return fmt.Errorf("updateCommitted: could not update commited: %v", err)
+func (b *batch) updateCommitted(committed bool) error {
+	b.Meta.Committed = committed
+	if err := b.rclient.HSet(b.MetaKey, "committed", committed).Err(); err != nil {
+		return fmt.Errorf("updateCommitted: could not update committed: %v", err)
 	}
-	if commited {
-		// remove expiration as batch has been commited
+	if committed {
+		// remove expiration as batch has been committed
 		if err := b.extendBatchExpiration(); err != nil {
 			return fmt.Errorf("updatedCommitted: could not expire: %v", err)
 		}
 		b.checkBatchDone()
 	} else {
 		if err := b.Server.Manager().Redis().Expire(b.BatchKey, time.Duration(2*time.Hour)).Err(); err != nil {
-			return fmt.Errorf("updatedCommited: could not expire: %v", err)
+			return fmt.Errorf("updatedCommitted: could not expire: %v", err)
 		}
 	}
 	return nil
@@ -240,40 +246,54 @@ func (b *batch) addJobToBatch(jobId string) error {
 	if err := b.rclient.SAdd(b.JobsKey, jobId).Err(); err != nil {
 		return fmt.Errorf("addJobToBatch: %v", err)
 	}
+	b.Meta.Total += 1
 	if err := b.rclient.HIncrBy(b.MetaKey, "total", 1).Err(); err != nil {
-		return fmt.Errorf("addJobToBatch: %v", err)
+		return fmt.Errorf("addJobToBatch: unable to modify total: %v", err)
+	}
+	b.Meta.Pending += 1
+	if err := b.rclient.HIncrBy(b.MetaKey, "pending", 1).Err(); err != nil {
+		return fmt.Errorf("addJobToBatch: unable to modify pending: %v", err)
 	}
 	b.Jobs = append(b.Jobs, jobId)
-	b.Meta.Total += 1
 	return nil
 }
 
-func (b *batch) removeJobFromBatch(jobId string, success bool) error {
-	if err := b.rclient.SRem(b.JobsKey, jobId).Err(); err != nil {
-		return fmt.Errorf("removeJobFromBatch: could not remove job key %v", err)
+func (b *batch) removeJobFromBatch(jobId string, success bool, isRetry bool) error {
+	if !isRetry {
+		// job has already been removed
+		if err := b.rclient.SRem(b.JobsKey, jobId).Err(); err != nil {
+			return fmt.Errorf("removeJobFromBatch: could not remove job key %v", err)
+		}
+		for i, v := range b.Jobs {
+			if v == jobId {
+				b.Jobs = append(b.Jobs[:i], b.Jobs[i+1:]...)
+				break
+			}
+		}
+		b.Meta.Pending -= 1
+		if err := b.rclient.HIncrBy(b.MetaKey, "pending", -1).Err(); err != nil {
+			return fmt.Errorf("removeJobFromBatch: unable to modify pending: %v", err)
+		}
+
 	}
 	if success {
 		b.Meta.Succeeded += 1
-		b.rclient.HIncrBy(b.MetaKey, "succeeded", 1)
+		if err := b.rclient.HIncrBy(b.MetaKey, "succeeded", 1).Err(); err != nil {
+			return fmt.Errorf("removeJobFromBatch: unable to modify succeeded: %v", err)
+		}
 	} else {
 		b.Meta.Failed += 1
-		b.rclient.HIncrBy(b.MetaKey, "failed", 1)
-	}
-	for i, v := range b.Jobs {
-		if v == jobId {
-			b.Jobs = append(b.Jobs[:i], b.Jobs[i+1:]...)
-			break
+		if err := b.rclient.HIncrBy(b.MetaKey, "failed", 1).Err(); err != nil {
+			return fmt.Errorf("removeJobFromBatch: unable to modify failed: %v", err)
 		}
 	}
+
 	b.checkBatchDone()
 	return nil
 }
 
 func (b *batch) isBatchDone() bool {
-	totalFinished := b.Meta.Succeeded + b.Meta.Failed
-	// TODO: check child jobs
-
-	return b.Meta.Committed == true && totalFinished == b.Meta.Total
+	return b.Meta.Committed == true && b.Meta.Pending == 0
 }
 
 func (b *batch) checkBatchDone() {
