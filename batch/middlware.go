@@ -19,7 +19,7 @@ func (b *BatchSubsystem) Fetch(ctx context.Context, wid string, queues ...string
 			if bid, ok := job.GetCustom("bid"); ok {
 				batch, err := b.getBatchFromInterface(bid)
 				if err != nil {
-					return nil, fmt.Errorf("Unable to retrieve batch %s", bid)
+					return nil, fmt.Errorf("fetch: unable to retrieve batch %s", bid)
 				}
 				batch.setWorkerForJid(job.Jid, wid)
 				util.Infof("Added worker %s for job %s to %s", wid, job.Jid, batch.Id)
@@ -34,11 +34,11 @@ func (b *BatchSubsystem) pushMiddleware(next func() error, ctx manager.Context) 
 	if bid, ok := ctx.Job().GetCustom("bid"); ok {
 		batch, err := b.getBatchFromInterface(bid)
 		if err != nil {
-			return fmt.Errorf("Unable to get batch %s", bid)
+			return fmt.Errorf("pushMiddleware: unable to get batch %s", bid)
 		}
 		if err := batch.jobQueued(ctx.Job().Jid); err != nil {
-			util.Warnf("Unable to add batch %v", err)
-			return fmt.Errorf("Unable to add job %s to batch %s", ctx.Job().Jid, bid)
+			util.Warnf("unable to add batch %v", err)
+			return fmt.Errorf("pushMiddleware: Unable to add job %s to batch %s", ctx.Job().Jid, bid)
 		}
 		util.Infof("Added %s to batch %s", ctx.Job().Jid, batch.Id)
 	}
@@ -46,19 +46,19 @@ func (b *BatchSubsystem) pushMiddleware(next func() error, ctx manager.Context) 
 }
 
 func (b *BatchSubsystem) fetchMiddleware(next func() error, ctx manager.Context) error {
-	middleware_err := next() // runs the rest of the middleware
+	middlewareErr := next() // runs the rest of the middleware
 	if bid, ok := ctx.Job().GetCustom("bid"); ok {
 		batch, err := b.getBatchFromInterface(bid)
 		if err != nil {
-			return fmt.Errorf("Unable to retrieve batch %s", bid)
+			return fmt.Errorf("fetchMiddleware: unable to retrieve batch %s", bid)
 		}
-		if middleware_err != nil {
+		if middlewareErr != nil {
 			// clear the worker id for a job since the worker id was added in the custom fetcher
 			batch.removeWorkerForJid(ctx.Job().Jid)
 		}
 	}
 
-	return middleware_err
+	return middlewareErr
 }
 
 func (b *BatchSubsystem) handleJobFinished(success bool) func(next func() error, ctx manager.Context) error {
@@ -81,7 +81,7 @@ func (b *BatchSubsystem) handleJobFinished(success bool) func(next func() error,
 					util.Warnf("Error converting callback job type %s", cb)
 					return next()
 				}
-				if err := batch.callbackJobSucceded(callbackType); err != nil {
+				if err := batch.callbackJobSucceeded(callbackType); err != nil {
 					util.Warnf("Unable to update batch")
 				}
 				return next()
@@ -90,7 +90,7 @@ func (b *BatchSubsystem) handleJobFinished(success bool) func(next func() error,
 		if bid, ok := ctx.Job().GetCustom("bid"); ok {
 			batch, err := b.getBatchFromInterface(bid)
 			if err != nil {
-				return fmt.Errorf("Unable to retrieve batch %s", bid)
+				return fmt.Errorf("handleJobFinished: unable to retrieve batch %s", bid)
 			}
 
 			status := "succeeded"
@@ -101,7 +101,7 @@ func (b *BatchSubsystem) handleJobFinished(success bool) func(next func() error,
 			batch.removeWorkerForJid(ctx.Job().Jid)
 			if err := batch.jobFinished(ctx.Job().Jid, success); err != nil {
 				util.Warnf("error processing finished job for batch %v", err)
-				return fmt.Errorf("Unable to process finished job %s for batch %s", ctx.Job().Jid, batch.Id)
+				return fmt.Errorf("handleJobFinished: unable to process finished job %s for batch %s", ctx.Job().Jid, batch.Id)
 			}
 
 		}

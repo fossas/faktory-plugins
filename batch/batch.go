@@ -2,7 +2,6 @@ package batch
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -28,11 +27,11 @@ type batch struct {
 }
 
 const (
-	// no status
+	// CallbackJobPending no status
 	CallbackJobPending = ""
-	// callback job has been queued
+	// CallbackJobQueued callback job has been queued
 	CallbackJobQueued = "1"
-	// callback job has succeeded
+	// CallbackJobSucceeded callback job has succeeded
 	CallbackJobSucceeded = "2"
 )
 
@@ -58,15 +57,15 @@ func (b *batch) init() error {
 	}
 
 	if err := b.Server.Manager().Redis().SAdd("batches", b.Id).Err(); err != nil {
-		return fmt.Errorf("init store batch: %v", err)
+		return fmt.Errorf("init: store batch: %v", err)
 	}
 
 	if err := b.Server.Manager().Redis().SetNX(b.BatchKey, b.Id, time.Duration(2*time.Hour)).Err(); err != nil {
-		return fmt.Errorf("init set expiration: %v", err)
+		return fmt.Errorf("init: set expiration: %v", err)
 	}
 	jobs, err := b.Server.Manager().Redis().SMembers(b.JobsKey).Result()
 	if err != nil {
-		return fmt.Errorf("init get jobs: %v", err)
+		return fmt.Errorf("init: get jobs: %v", err)
 	}
 	b.Jobs = jobs
 
@@ -90,20 +89,20 @@ func (b *batch) init() error {
 
 	b.Meta.Total, err = strconv.Atoi(meta["total"])
 	if err != nil {
-		return fmt.Errorf("failed converting string to int: %v", err)
+		return fmt.Errorf("init: failed converting string to int: %v", err)
 	}
 
 	b.Meta.Failed, err = strconv.Atoi(meta["failed"])
 	if err != nil {
-		return fmt.Errorf("failed converting string to int: %v", err)
+		return fmt.Errorf("init: failed converting string to int: %v", err)
 	}
 	b.Meta.Succeeded, err = strconv.Atoi(meta["succeeded"])
 	if err != nil {
-		return fmt.Errorf("failed converting string to int: %v", err)
+		return fmt.Errorf("init: failed converting string to int: %v", err)
 	}
 	b.Meta.Committed, err = strconv.ParseBool(meta["committed"])
 	if err != nil {
-		return fmt.Errorf("failed converting string to bool: %v", err)
+		return fmt.Errorf("init: failed converting string to bool: %v", err)
 	}
 	b.Meta.Description = meta["description"]
 	b.Meta.CreatedAt = meta["created_at"]
@@ -117,7 +116,7 @@ func (b *batch) init() error {
 
 func (b *batch) commit() error {
 	b.mu.Lock()
-	if err := b.updateCommited(true); err != nil {
+	if err := b.updateCommitted(true); err != nil {
 		return fmt.Errorf("commit: %v", err)
 	}
 	b.mu.Unlock()
@@ -128,9 +127,9 @@ func (b *batch) open() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.isBatchDone() {
-		return errors.New("batch job has already finished.")
+		return fmt.Errorf("open: batch job (%s) has already finished", b.Id)
 	}
-	if err := b.updateCommited(false); err != nil {
+	if err := b.updateCommitted(false); err != nil {
 		return fmt.Errorf("open: %v", err)
 	}
 	return nil
@@ -139,7 +138,7 @@ func (b *batch) open() error {
 func (b *batch) jobQueued(jobId string) error {
 	b.mu.Lock()
 	if err := b.addJobToBatch(jobId); err != nil {
-		return fmt.Errorf("add job to batch: %v", err)
+		return fmt.Errorf("jobQueued: add job to batch: %v", err)
 	}
 	b.mu.Unlock()
 	return nil
@@ -148,16 +147,16 @@ func (b *batch) jobQueued(jobId string) error {
 func (b *batch) jobFinished(jobId string, success bool) error {
 	b.mu.Lock()
 	if err := b.removeJobFromBatch(jobId, success); err != nil {
-		return fmt.Errorf("job finished: %v", err)
+		return fmt.Errorf("jobFinished: %v", err)
 	}
 	b.mu.Unlock()
 	return nil
 }
 
-func (b *batch) callbackJobSucceded(callbackType string) error {
+func (b *batch) callbackJobSucceeded(callbackType string) error {
 	b.mu.Lock()
 	if err := b.updateJobCallbackState(callbackType, CallbackJobSucceeded); err != nil {
-		return fmt.Errorf("update callback job state: %v", err)
+		return fmt.Errorf("callbackJobSucceeded: update callback job state: %v", err)
 	}
 	b.mu.Unlock()
 	return nil
@@ -187,32 +186,32 @@ func (b *batch) hasWorker(wid string) bool {
 func (b *batch) remove() error {
 	b.mu.Lock()
 	if err := b.Server.Manager().Redis().SRem("batches", b.Id).Err(); err != nil {
-		return fmt.Errorf("remove batch: %s, %v", b.Id, err)
+		return fmt.Errorf("remove: batch (%s) %v", b.Id, err)
 	}
 	if err := b.rclient.Del(b.MetaKey).Err(); err != nil {
-		return fmt.Errorf("remove batch: %s %v", b.Id, err)
+		return fmt.Errorf("remove: batch (%s) %v", b.Id, err)
 	}
 	if err := b.rclient.Del(b.JobsKey).Err(); err != nil {
-		return fmt.Errorf("remove batch: %s, %v", b.Id, err)
+		return fmt.Errorf("remove: batch (%s), %v", b.Id, err)
 	}
 	b.mu.Unlock()
 	return nil
 }
 
-func (b *batch) updateCommited(commited bool) error {
+func (b *batch) updateCommitted(commited bool) error {
 	b.Meta.Committed = commited
 	if err := b.rclient.HSet(b.MetaKey, "commited", commited).Err(); err != nil {
-		return fmt.Errorf("updateCommited set commited: %v", err)
+		return fmt.Errorf("updateCommitted: could not update commited: %v", err)
 	}
 	if commited {
 		// remove expiration as batch has been commited
 		if err := b.extendBatchExpiration(); err != nil {
-			return fmt.Errorf("updatedCommited set expire: %v", err)
+			return fmt.Errorf("updatedCommitted: could not expire: %v", err)
 		}
 		b.checkBatchDone()
 	} else {
 		if err := b.Server.Manager().Redis().Expire(b.BatchKey, time.Duration(2*time.Hour)).Err(); err != nil {
-			return fmt.Errorf("updatedCommited set expire: %v", err)
+			return fmt.Errorf("updatedCommited: could not expire: %v", err)
 		}
 	}
 	return nil
@@ -225,13 +224,13 @@ func (b *batch) extendBatchExpiration() error {
 func (b *batch) updateJobCallbackState(callbackType string, state string) error {
 	if callbackType == "success" {
 		b.Meta.SuccessJobState = state
-		if err := b.rclient.HSet(b.MetaKey, "succes_st", state).Err(); err != nil {
-			return err
+		if err := b.rclient.HSet(b.MetaKey, "success_st", state).Err(); err != nil {
+			return fmt.Errorf("updateJobCallbackState: could not set success_st: %v", err)
 		}
 	} else {
 		b.Meta.CompleteJobState = state
 		if err := b.rclient.HSet(b.MetaKey, "completed_st", state).Err(); err != nil {
-			return err
+			return fmt.Errorf("updateJobCallbackState: could not set completed_st: %v", err)
 		}
 	}
 	return nil
@@ -239,10 +238,10 @@ func (b *batch) updateJobCallbackState(callbackType string, state string) error 
 
 func (b *batch) addJobToBatch(jobId string) error {
 	if err := b.rclient.SAdd(b.JobsKey, jobId).Err(); err != nil {
-		return fmt.Errorf("add job to batch: %v", err)
+		return fmt.Errorf("addJobToBatch: %v", err)
 	}
 	if err := b.rclient.HIncrBy(b.MetaKey, "total", 1).Err(); err != nil {
-		return fmt.Errorf("increase job total: %v", err)
+		return fmt.Errorf("addJobToBatch: %v", err)
 	}
 	b.Jobs = append(b.Jobs, jobId)
 	b.Meta.Total += 1
@@ -251,7 +250,7 @@ func (b *batch) addJobToBatch(jobId string) error {
 
 func (b *batch) removeJobFromBatch(jobId string, success bool) error {
 	if err := b.rclient.SRem(b.JobsKey, jobId).Err(); err != nil {
-		return fmt.Errorf("remove job from batch: %v", err)
+		return fmt.Errorf("removeJobFromBatch: could not remove job key %v", err)
 	}
 	if success {
 		b.Meta.Succeeded += 1
@@ -291,7 +290,7 @@ func (b *batch) checkBatchDone() {
 func (b *batch) queueBatchDoneJob(jobData string, callbackType string) {
 	var job client.Job
 	if err := json.Unmarshal([]byte(jobData), &job); err != nil {
-		util.Warnf("unmarshal job(%s): %v", callbackType, err)
+		util.Warnf("queueBatchDoneJob: unmarshal job(%s): %v", callbackType, err)
 		return
 	}
 	job.Jid = fmt.Sprintf("%s-%s", b.Id, callbackType)
@@ -299,11 +298,11 @@ func (b *batch) queueBatchDoneJob(jobData string, callbackType string) {
 	job.SetCustom("_bid", b.Id)
 	job.SetCustom("_cb", callbackType)
 	if err := b.Server.Manager().Push(&job); err != nil {
-		util.Warnf("cannot push job(%s) %v", callbackType, err)
+		util.Warnf("queueBatchDoneJob: cannot push job (%s) %v", callbackType, err)
 		return
 	}
 	if err := b.updateJobCallbackState(callbackType, CallbackJobQueued); err != nil {
-		util.Warnf("Could not update job callback state: %v", err)
+		util.Warnf("queueBatchDoneJob: could not update job callback state: %v", err)
 	}
 	util.Infof("Pushed %s job (jid: %s)", callbackType, job.Jid)
 }

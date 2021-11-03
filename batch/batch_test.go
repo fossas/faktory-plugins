@@ -206,7 +206,7 @@ func TestBatchCannotOpen(t *testing.T) {
 
 		b, err = cl.BatchOpen(b.Bid)
 		assert.Error(t, err)
-		assert.EqualError(t, err, "ERR Batch has already finished")
+		assert.EqualError(t, err, "ERR batch has already finished")
 	})
 }
 
@@ -237,7 +237,7 @@ func TestBatchInvalidWorkerOpen(t *testing.T) {
 
 		b, err = otherClient.BatchOpen(b.Bid)
 		assert.Error(t, err)
-		assert.EqualError(t, err, "ERR This worker is not working on a job in the requested batch")
+		assert.EqualError(t, err, "ERR this worker is not working on a job in the requested batch")
 	})
 }
 
@@ -268,7 +268,7 @@ func TestBatchLoadBatches(t *testing.T) {
 		processJob(cl, false, nil)
 		batchSystem.Batches = make(map[string]*batch)
 		_, err = batchSystem.getBatch(b.Bid)
-		assert.EqualError(t, err, "No batch found")
+		assert.EqualError(t, err, "getBatch: no batch found")
 		err = batchSystem.loadExistingBatches()
 		assert.Nil(t, err)
 		batchData, err := batchSystem.getBatch(b.Bid)

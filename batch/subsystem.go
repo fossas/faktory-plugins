@@ -12,9 +12,9 @@ import (
 	"github.com/contribsys/faktory/util"
 )
 
-// BatchSubsystem this enables jobs to be grouped into a batch
+// BatchSubsystem enables jobs to be grouped into a batch
 // the implementation follows the spec here: https://github.com/contribsys/faktory/wiki/Ent-Batches
-// With the exception of child batches, which are not implemented
+// Except child batches, which are not implemented
 // for a client to re-open a batch it must have a WID (worker id) applied to it
 // that worker must be processing a job within the batch
 type BatchSubsystem struct {
@@ -24,7 +24,7 @@ type BatchSubsystem struct {
 	Fetcher manager.Fetcher
 }
 
-// structure for a new batch request
+// NewBatchRequest structure for a new batch request
 // Success and Complete are jobs to be queued
 // once the batch has been commited and all jobs processed
 type NewBatchRequest struct {
@@ -34,7 +34,7 @@ type NewBatchRequest struct {
 	Complete    *client.Job `json:"complete,omitempty"`
 }
 
-// Starts the batch subsystem
+// Start - configures the batch subsystem
 func (b *BatchSubsystem) Start(s *server.Server) error {
 	b.Server = s
 	b.mu = sync.Mutex{}
@@ -49,7 +49,7 @@ func (b *BatchSubsystem) Start(s *server.Server) error {
 	return nil
 }
 
-// name of the plugin
+// Name - name of the plugin
 func (b *BatchSubsystem) Name() string {
 	return "Batch"
 }
@@ -71,12 +71,12 @@ func (b *BatchSubsystem) addMiddleware() {
 func (b *BatchSubsystem) getBatchFromInterface(batchId interface{}) (*batch, error) {
 	bid, ok := batchId.(string)
 	if !ok {
-		return nil, errors.New("Invalid custom bid value")
+		return nil, errors.New("getBatchFromInterface: invalid custom bid value")
 	}
 	batch, err := b.getBatch(bid)
 	if err != nil {
-		util.Warnf("Unable to retrieve batch: %v", err)
-		return nil, fmt.Errorf("Unable to get batch: %s", bid)
+		util.Warnf("getBatchFromInterface: Unable to retrieve batch: %v", err)
+		return nil, fmt.Errorf("getBatchFromInterface: unable to get batch: %s", bid)
 	}
 	return batch, nil
 }
@@ -84,12 +84,12 @@ func (b *BatchSubsystem) getBatchFromInterface(batchId interface{}) (*batch, err
 func (b *BatchSubsystem) loadExistingBatches() error {
 	vals, err := b.Server.Manager().Redis().SMembers("batches").Result()
 	if err != nil {
-		return fmt.Errorf("retrieve batches: %v", err)
+		return fmt.Errorf("loadExistingBatches: retrieve batches: %v", err)
 	}
 	for idx := range vals {
 		batch, err := b.newBatch(vals[idx], &batchMeta{})
 		if err != nil {
-			util.Warnf("create batch: %v", err)
+			util.Warnf("loadExistingBatches: erroring load batch (%s) %v", vals[idx], err)
 			continue
 		}
 		b.Batches[vals[idx]] = batch
@@ -124,7 +124,7 @@ func (b *BatchSubsystem) newBatch(batchId string, meta *batchMeta) (*batch, erro
 		Server:   b.Server,
 	}
 	if err := batch.init(); err != nil {
-		return nil, fmt.Errorf("initialize batch: %v", err)
+		return nil, fmt.Errorf("newBatch: %v", err)
 	}
 
 	b.Batches[batchId] = batch
@@ -136,23 +136,23 @@ func (b *BatchSubsystem) getBatch(batchId string) (*batch, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if batchId == "" {
-		return nil, fmt.Errorf("batchId cannot be blank")
+		return nil, fmt.Errorf("getBatch: batchId cannot be blank")
 	}
 
 	batch, ok := b.Batches[batchId]
 
 	if !ok {
-		return nil, fmt.Errorf("No batch found")
+		return nil, fmt.Errorf("getBatch: no batch found")
 	}
 
 	exists, err := b.Server.Manager().Redis().Exists(batch.BatchKey).Result()
 	if err != nil {
 		util.Warnf("Cannot confirm batch exists: %v", err)
-		return nil, fmt.Errorf("Unable to check if batch has timed out")
+		return nil, fmt.Errorf("getBatch: unable to check if batch has timed out")
 	}
 	if exists == 0 {
 		b.removeBatch(batch)
-		return nil, fmt.Errorf("Batch was not commited within 2 hours")
+		return nil, fmt.Errorf("getBatch: batch was not commited within 2 hours")
 	}
 
 	return batch, nil
@@ -160,7 +160,7 @@ func (b *BatchSubsystem) getBatch(batchId string) (*batch, error) {
 
 func (b *BatchSubsystem) removeBatch(batch *batch) {
 	if err := batch.remove(); err != nil {
-		util.Warnf("Unable to remove batch: %v", err)
+		util.Warnf("removeBatch: unable to remove batch: %v", err)
 	}
 	delete(b.Batches, batch.Id)
 

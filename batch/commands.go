@@ -14,7 +14,7 @@ import (
 func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cmd string) {
 	parts := strings.SplitN(cmd, " ", 3)[1:]
 	if len(parts) < 2 {
-		c.Error(cmd, errors.New("Invalid BATCH command"))
+		_= c.Error(cmd, errors.New("invalid BATCH command"))
 		return
 	}
 
@@ -22,7 +22,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 	case "NEW":
 		var batchRequest NewBatchRequest
 		if err := json.Unmarshal([]byte(parts[1]), &batchRequest); err != nil {
-			_ = c.Error(cmd, fmt.Errorf("Invalid JSON data: %v", err))
+			_ = c.Error(cmd, fmt.Errorf("invalid JSON data: %v", err))
 			return
 		}
 
@@ -32,7 +32,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		if batchRequest.Success != nil {
 			successData, err := json.Marshal(batchRequest.Success)
 			if err != nil {
-				_ = c.Error(cmd, fmt.Errorf("Invalid Success job"))
+				_ = c.Error(cmd, fmt.Errorf("invalid Success job"))
 				return
 			}
 			success = string(successData)
@@ -42,7 +42,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		if batchRequest.Complete != nil {
 			completeData, err := json.Marshal(batchRequest.Complete)
 			if err != nil {
-				_ = c.Error(cmd, fmt.Errorf("Invalid Complete job"))
+				_ = c.Error(cmd, fmt.Errorf("invalid Complete job"))
 				return
 			}
 			complete = string(completeData)
@@ -52,7 +52,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		batch, err := b.newBatch(batchId, meta)
 
 		if err != nil {
-			c.Error(cmd, fmt.Errorf("Unable to create batch: %v", err))
+			c.Error(cmd, fmt.Errorf("unable to create batch: %v", err))
 			return
 		}
 
@@ -72,28 +72,28 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 
 		wid := client.FieldByName("Wid").String()
 		if wid == "" {
-			_ = c.Error(cmd, fmt.Errorf("Batches can only be opened from a client with wid set"))
+			_ = c.Error(cmd, fmt.Errorf("batches can only be opened from a client with wid set"))
 			return
 		}
 
 		batch, err := b.getBatch(batchId)
 		if err != nil {
-			_ = c.Error(cmd, fmt.Errorf("Cannot get batch: %v", err))
+			_ = c.Error(cmd, fmt.Errorf("cannot get batch: %v", err))
 			return
 		}
 
 		if batch.isBatchDone() {
-			_ = c.Error(cmd, errors.New("Batch has already finished"))
+			_ = c.Error(cmd, errors.New("batch has already finished"))
 			return
 		}
 
 		if !batch.hasWorker(wid) {
-			_ = c.Error(cmd, fmt.Errorf("This worker is not working on a job in the requested batch"))
+			_ = c.Error(cmd, fmt.Errorf("this worker is not working on a job in the requested batch"))
 			return
 		}
 
 		if err := batch.open(); err != nil {
-			_ = c.Error(cmd, fmt.Errorf("Cannot open batch: %v", err))
+			_ = c.Error(cmd, fmt.Errorf("cannot open batch: %v", err))
 			return
 		}
 
@@ -107,12 +107,12 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		}
 		batch, err := b.getBatch(batchId)
 		if err != nil {
-			_ = c.Error(cmd, fmt.Errorf("Cannot get batch: %v", err))
+			_ = c.Error(cmd, fmt.Errorf("cannot get batch: %v", err))
 			return
 		}
 
 		if err := batch.commit(); err != nil {
-			_ = c.Error(cmd, fmt.Errorf("Cannot commit batch: %v", err))
+			_ = c.Error(cmd, fmt.Errorf("cannot commit batch: %v", err))
 			return
 		}
 		_ = c.Ok()
@@ -121,7 +121,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		batchId := parts[1]
 		batch, err := b.getBatch(batchId)
 		if err != nil {
-			_ = c.Error(cmd, fmt.Errorf("Cannot find batch: %v", err))
+			_ = c.Error(cmd, fmt.Errorf("cannot find batch: %v", err))
 			return
 		}
 		data, err := json.Marshal(map[string]interface{}{
@@ -134,12 +134,12 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			"success_st":   CallbackJobPending,
 		})
 		if err != nil {
-			c.Error(cmd, fmt.Errorf("Unable to marshal batch data: %v", err))
+			c.Error(cmd, fmt.Errorf("unable to marshal batch data: %v", err))
 			return
 		}
 		_ = c.Result([]byte(data))
 		return
 	default:
-		_ = c.Error(cmd, fmt.Errorf("Invalid BATCH operation %s", parts[0]))
+		_ = c.Error(cmd, fmt.Errorf("invalid BATCH operation %s", parts[0]))
 	}
 }
