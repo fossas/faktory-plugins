@@ -10,7 +10,7 @@ import (
 
 // Fetch - wraps around Fetch (which retrieves a job)
 // faktory does not expose the workerId (Wid) in middleware
-// workerId is needed when a worder tries to re-open a batch
+// workerId is needed when a worker tries to re-open a batch
 func (b *BatchSubsystem) Fetch(ctx context.Context, wid string, queues ...string) (manager.Lease, error) {
 	lease, err := b.Fetcher.Fetch(ctx, wid, queues...)
 	if err == nil && lease != manager.Nothing {
