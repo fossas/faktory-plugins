@@ -302,6 +302,15 @@ func (b *batch) removeJobFromBatch(jobId string, success bool, isRetry bool) err
 func (b *batch) addChild(childBatch *batch) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if childBatch.Id == b.Id {
+		return fmt.Errorf("addChild: child batch is the same as the parent")
+	}
+	for _, child := range b.Children {
+		if child.Id == childBatch.Id {
+			// avoid duplicates
+			return nil
+		}
+	}
 	b.Children = append(b.Children, childBatch)
 	if err := b.rclient.SAdd(b.ChildKey, childBatch.Id).Err(); err != nil {
 		return fmt.Errorf("addChild: cannot save child (%s) to batch (%s) %v", childBatch.Id, b.Id, err)
@@ -316,6 +325,15 @@ func (b *batch) addChild(childBatch *batch) error {
 func (b *batch) addParent(parentBatch *batch) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if parentBatch.Id == b.Id {
+		return fmt.Errorf("addParent: parent batch is the same as the child")
+	}
+	for _, parent := range b.Parents {
+		if parent.Id == parentBatch.Id {
+			// avoid duplicates
+			return nil
+		}
+	}
 	b.Parents = append(b.Parents, parentBatch)
 	if err := b.rclient.SAdd(b.ParentsKey, parentBatch.Id).Err(); err != nil {
 		return fmt.Errorf("addParent: %v", err)
