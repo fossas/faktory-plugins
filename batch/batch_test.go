@@ -97,7 +97,6 @@ func TestBatchCompleteAndEventualSuccess(t *testing.T) {
 		assert.Nil(t, err)
 		assert.NotEqual(t, "", b.Bid)
 
-		time.Sleep(1 * time.Second)
 		batchData, err := batchSystem.getBatch(b.Bid)
 		assert.Nil(t, err)
 		assert.Equal(t, 2, batchData.Meta.Total)
@@ -180,7 +179,6 @@ func TestBatchReopen(t *testing.T) {
 		assert.Nil(t, err)
 		assert.NotEqual(t, "", b.Bid)
 
-		time.Sleep(1 * time.Second)
 		batchData, err := batchSystem.getBatch(b.Bid)
 		assert.True(t, batchData.Meta.Committed)
 
@@ -231,7 +229,6 @@ func TestBatchCannotOpen(t *testing.T) {
 		assert.Nil(t, err)
 		assert.NotEqual(t, "", b.Bid)
 
-		time.Sleep(1 * time.Second)
 		batchData, err := batchSystem.getBatch(b.Bid)
 		assert.True(t, batchData.Meta.Committed)
 
@@ -265,7 +262,6 @@ func TestBatchInvalidWorkerOpen(t *testing.T) {
 		assert.Nil(t, err)
 		assert.NotEqual(t, "", b.Bid)
 
-		time.Sleep(1 * time.Second)
 		batchData, err := batchSystem.getBatch(b.Bid)
 		assert.True(t, batchData.Meta.Committed)
 
@@ -357,7 +353,6 @@ func TestChildBatch(t *testing.T) {
 			return nil
 		})
 		assert.Nil(t, err)
-		time.Sleep(1 * time.Second)
 		batchData, err := batchSystem.getBatch(b.Bid)
 		assert.Nil(t, err)
 		assert.Len(t, batchData.Children, 2)
