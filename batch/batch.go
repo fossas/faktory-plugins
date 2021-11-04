@@ -201,10 +201,16 @@ func (b *batch) remove() error {
 		return fmt.Errorf("remove: batch (%s) %v", b.Id, err)
 	}
 	if err := b.rclient.Del(b.MetaKey).Err(); err != nil {
-		return fmt.Errorf("remove: batch (%s) %v", b.Id, err)
+		return fmt.Errorf("remove: batch meta (%s) %v", b.Id, err)
 	}
 	if err := b.rclient.Del(b.JobsKey).Err(); err != nil {
-		return fmt.Errorf("remove: batch (%s), %v", b.Id, err)
+		return fmt.Errorf("remove: batch jobs (%s), %v", b.Id, err)
+	}
+	if err := b.rclient.Del(b.ParentsKey).Err(); err != nil {
+		return fmt.Errorf("remove: batch parents (%s), %v", b.Id, err)
+	}
+	if err := b.rclient.Del(b.ChildKey).Err(); err != nil {
+		return fmt.Errorf("remove: batch children (%s), %v", b.Id, err)
 	}
 	b.mu.Unlock()
 	return nil
@@ -340,10 +346,29 @@ func (b *batch) addParent(parentBatch *batch) error {
 	return nil
 }
 
-func (b *batch) childFinished() {
+func (b *batch) removeParent(parentBatch *batch) error {
+	for i, p := range b.Parents {
+		if p.Id == parentBatch.Id {
+			b.Parents = append(b.Parents[:i], b.Parents[i+1:]...)
+			break
+		}
+	}
+	if err := b.rclient.SRem(b.ParentsKey, parentBatch.Id).Err(); err != nil {
+		return fmt.Errorf("removeParent: could not remove parent %v", err)
+	}
+	return nil
+}
+
+func (b *batch) childCompleted(childBatch *batch, areChildrenFinished bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.areChildrenFinished() {
+		if areChildrenFinished {
+			// batch can be removed as a parent to stop propagation
+			if err := childBatch.removeParent(b); err != nil {
+				util.Warnf("childCompleted: unable to remove parent (%s) from (%s): %v", b.Id, childBatch.Id, err)
+			}
+		}
 		b.checkBatchDone()
 	}
 }
@@ -390,7 +415,8 @@ func (b *batch) isBatchCompleted() bool {
 
 func (b *batch) checkBatchDone() {
 	if b.isBatchCompleted() {
-		if b.areChildrenFinished() {
+		areChildrenFinished := b.areChildrenFinished()
+		if areChildrenFinished {
 			// only create callback jobs if searched children are completed
 			if b.Meta.CompleteJob != "" && b.Meta.CompleteJobState == CallbackJobPending {
 				b.queueBatchDoneJob(b.Meta.CompleteJob, "complete")
@@ -398,10 +424,17 @@ func (b *batch) checkBatchDone() {
 			if b.Meta.Succeeded == b.Meta.Total && b.Meta.SuccessJob != "" && b.Meta.SuccessJobState == CallbackJobPending {
 				b.queueBatchDoneJob(b.Meta.SuccessJob, "success")
 			}
+
+			// remove children as they are finished
+			// this will reduce the depth parents need to traverse
+			b.Children = []*batch{}
+			if err := b.rclient.Del(b.ChildKey).Err(); err != nil {
+				util.Warnf("checkBatchDone: unable to remove child batches from %s: %v", b.Id, err)
+			}
 		}
 		// notify parents child is done
 		for _, parent := range b.Parents {
-			parent.childFinished()
+			parent.childCompleted(b, areChildrenFinished)
 		}
 	}
 }
