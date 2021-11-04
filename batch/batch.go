@@ -230,7 +230,7 @@ func (b *batch) updateCommitted(committed bool) error {
 }
 
 func (b *batch) extendBatchExpiration() error {
-	return b.Subsystem.Server.Manager().Redis().Expire(b.BatchKey, time.Duration(2*time.Hour)).Err()
+	return b.Subsystem.Server.Manager().Redis().Expire(b.BatchKey, time.Duration(b.Subsystem.Options.UncommittedTimeout) * time.Minute).Err()
 }
 
 func (b *batch) updateJobCallbackState(callbackType string, state string) error {
@@ -373,7 +373,7 @@ func (b *batch) areChildrenFinished() bool {
 
 		nextDepth:
 			if len(stack) == 0 && len(childStack) > 0 {
-				if currentDepth == b.Subsystem.Options.ChildDepthTracked {
+				if currentDepth == b.Subsystem.Options.ChildSearchDepth {
 					return true
 				}
 				currentDepth += 1

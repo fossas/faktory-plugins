@@ -38,8 +38,10 @@ type NewBatchRequest struct {
 type Options struct {
 	// Enabled - toggle for enabling the plugin
 	Enabled bool
-	// ChildDepthTracked - the n-th depth/level at which a batch will check if a child batch is done
-	ChildDepthTracked int
+	// ChildSearchDepth - the n-th depth/level at which a batch will check if a child batch is done
+	ChildSearchDepth int
+	// UncommittedTimeout - number of minutes a batch is set to expire before committed
+	UncommittedTimeout int
 }
 
 // Start - configures the batch subsystem
@@ -77,8 +79,21 @@ func (b *BatchSubsystem) getOptions(s *server.Server) *Options {
 	if !ok {
 		enabled = false
 	}
+	childSearchDepthValue := s.Options.Config("batch", "child_search_depth", 0)
+	childSearchDepth, ok := childSearchDepthValue.(int)
+	if !ok {
+		childSearchDepth = 0
+	}
+
+	uncommittedTimeoutValue := s.Options.Config("batch", "uncommitted_timeout", 120)
+	uncommittedTimeout, ok := uncommittedTimeoutValue.(int)
+	if !ok {
+		uncommittedTimeout = 120
+	}
 	return &Options{
 		Enabled: enabled,
+		ChildSearchDepth: childSearchDepth,
+		UncommittedTimeout: uncommittedTimeout,
 	}
 }
 
