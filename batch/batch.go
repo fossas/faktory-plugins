@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/contribsys/faktory/client"
-	"github.com/contribsys/faktory/server"
 	"github.com/contribsys/faktory/util"
 	"github.com/go-redis/redis"
 )
@@ -25,7 +24,7 @@ type batch struct {
 	Parents    []*batch
 	Children   []*batch
 	Workers    map[string]string
-	Server     *server.Server
+	Subsystem  *BatchSubsystem
 	rclient    *redis.Client
 	mu         sync.Mutex
 }
@@ -61,14 +60,14 @@ func (b *batch) init() error {
 		return nil
 	}
 
-	if err := b.Server.Manager().Redis().SAdd("batches", b.Id).Err(); err != nil {
+	if err := b.Subsystem.Server.Manager().Redis().SAdd("batches", b.Id).Err(); err != nil {
 		return fmt.Errorf("init: store batch: %v", err)
 	}
 
-	if err := b.Server.Manager().Redis().SetNX(b.BatchKey, b.Id, time.Duration(2*time.Hour)).Err(); err != nil {
+	if err := b.Subsystem.Server.Manager().Redis().SetNX(b.BatchKey, b.Id, time.Duration(2*time.Hour)).Err(); err != nil {
 		return fmt.Errorf("init: set expiration: %v", err)
 	}
-	jobs, err := b.Server.Manager().Redis().SMembers(b.JobsKey).Result()
+	jobs, err := b.Subsystem.Server.Manager().Redis().SMembers(b.JobsKey).Result()
 	if err != nil {
 		return fmt.Errorf("init: get jobs: %v", err)
 	}
@@ -198,7 +197,7 @@ func (b *batch) hasWorker(wid string) bool {
 
 func (b *batch) remove() error {
 	b.mu.Lock()
-	if err := b.Server.Manager().Redis().SRem("batches", b.Id).Err(); err != nil {
+	if err := b.Subsystem.Server.Manager().Redis().SRem("batches", b.Id).Err(); err != nil {
 		return fmt.Errorf("remove: batch (%s) %v", b.Id, err)
 	}
 	if err := b.rclient.Del(b.MetaKey).Err(); err != nil {
@@ -223,7 +222,7 @@ func (b *batch) updateCommitted(committed bool) error {
 		}
 		b.checkBatchDone()
 	} else {
-		if err := b.Server.Manager().Redis().Expire(b.BatchKey, time.Duration(2*time.Hour)).Err(); err != nil {
+		if err := b.Subsystem.Server.Manager().Redis().Expire(b.BatchKey, time.Duration(2*time.Hour)).Err(); err != nil {
 			return fmt.Errorf("updatedCommitted: could not expire: %v", err)
 		}
 	}
@@ -231,7 +230,7 @@ func (b *batch) updateCommitted(committed bool) error {
 }
 
 func (b *batch) extendBatchExpiration() error {
-	return b.Server.Manager().Redis().Expire(b.BatchKey, time.Duration(2*time.Hour)).Err()
+	return b.Subsystem.Server.Manager().Redis().Expire(b.BatchKey, time.Duration(2*time.Hour)).Err()
 }
 
 func (b *batch) updateJobCallbackState(callbackType string, state string) error {
@@ -350,27 +349,56 @@ func (b *batch) childFinished() {
 }
 
 func (b *batch) areChildrenFinished() bool {
-	for _, child := range b.Children {
+	// iterate through children up to a certain depth
+	// check to see if any batch still has jobs being processed
+	currentDepth := 1
+	visited := map[string]bool{}
+	stack := b.Children
+	var childStack []*batch
+	var child *batch
+
+	for len(stack) > 0 {
+
+		child, stack = stack[0], stack[1:]
+		if visited[child.Id] {
+			goto nextDepth
+		}
+		visited[child.Id] = true
 		if !child.isBatchDone() {
 			return false
 		}
+		if len(child.Children) > 0 {
+			childStack = append(childStack, child.Children...)
+		}
+
+		nextDepth:
+			if len(stack) == 0 && len(childStack) > 0 {
+				if currentDepth == b.Subsystem.Options.ChildDepthTracked {
+					return true
+				}
+				currentDepth += 1
+				stack = childStack
+				childStack = []*batch{}
+			}
 	}
 	return true
 }
 
 func (b *batch) isBatchDone() bool {
-	return b.Meta.Committed == true && b.Meta.Pending == 0 && b.areChildrenFinished()
+	return b.Meta.Committed == true && b.Meta.Pending == 0
 }
 
 func (b *batch) checkBatchDone() {
 	if b.isBatchDone() {
-		if b.Meta.CompleteJob != "" && b.Meta.CompleteJobState == CallbackJobPending {
-			b.queueBatchDoneJob(b.Meta.CompleteJob, "complete")
+		if b.areChildrenFinished() {
+			// only create callback jobs if children are considered done
+			if b.Meta.CompleteJob != "" && b.Meta.CompleteJobState == CallbackJobPending {
+				b.queueBatchDoneJob(b.Meta.CompleteJob, "complete")
+			}
+			if b.Meta.Succeeded == b.Meta.Total && b.Meta.SuccessJob != "" && b.Meta.SuccessJobState == CallbackJobPending {
+				b.queueBatchDoneJob(b.Meta.SuccessJob, "success")
+			}
 		}
-		if b.Meta.Succeeded == b.Meta.Total && b.Meta.SuccessJob != "" && b.Meta.SuccessJobState == CallbackJobPending {
-			b.queueBatchDoneJob(b.Meta.SuccessJob, "success")
-		}
-
 		// notify parents child is done
 		for _, parent := range b.Parents {
 			parent.childFinished()
@@ -388,7 +416,7 @@ func (b *batch) queueBatchDoneJob(jobData string, callbackType string) {
 	// these are required to update the call back job state
 	job.SetCustom("_bid", b.Id)
 	job.SetCustom("_cb", callbackType)
-	if err := b.Server.Manager().Push(&job); err != nil {
+	if err := b.Subsystem.Server.Manager().Push(&job); err != nil {
 		util.Warnf("queueBatchDoneJob: cannot push job (%s) %v", callbackType, err)
 		return
 	}

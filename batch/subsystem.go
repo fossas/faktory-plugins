@@ -38,6 +38,8 @@ type NewBatchRequest struct {
 type Options struct {
 	// Enabled - toggle for enabling the plugin
 	Enabled bool
+	// ChildDepthTracked - the n-th depth/level at which a batch will check if a child batch is done
+	ChildDepthTracked int
 }
 
 // Start - configures the batch subsystem
@@ -166,20 +168,20 @@ func (b *BatchSubsystem) newBatchMeta(description string, success string, comple
 
 func (b *BatchSubsystem) newBatch(batchId string, meta *batchMeta) (*batch, error) {
 	batch := &batch{
-		Id:       batchId,
-		BatchKey: fmt.Sprintf("batch-%s", batchId),
-		JobsKey:  fmt.Sprintf("jobs-%s", batchId),
-		MetaKey:  fmt.Sprintf("meta-%s", batchId),
-		ParentsKey:  fmt.Sprintf("parent-ids-%s", batchId),
-		ChildKey:  fmt.Sprintf("child-ids-%s", batchId),
-		Workers:  make(map[string]string),
-		Jobs:     make([]string, 0),
-		Parents:  make([]*batch, 0),
-		Children: make([]*batch, 0),
-		Meta:     meta,
-		rclient:  b.Server.Manager().Redis(),
-		mu:       sync.Mutex{},
-		Server:   b.Server,
+		Id:         batchId,
+		BatchKey:   fmt.Sprintf("batch-%s", batchId),
+		JobsKey:    fmt.Sprintf("jobs-%s", batchId),
+		MetaKey:    fmt.Sprintf("meta-%s", batchId),
+		ParentsKey: fmt.Sprintf("parent-ids-%s", batchId),
+		ChildKey:   fmt.Sprintf("child-ids-%s", batchId),
+		Workers:    make(map[string]string),
+		Jobs:       make([]string, 0),
+		Parents:    make([]*batch, 0),
+		Children:   make([]*batch, 0),
+		Meta:       meta,
+		rclient:    b.Server.Manager().Redis(),
+		mu:         sync.Mutex{},
+		Subsystem:  b,
 	}
 	if err := batch.init(); err != nil {
 		return nil, fmt.Errorf("newBatch: %v", err)

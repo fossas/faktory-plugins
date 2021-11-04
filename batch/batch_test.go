@@ -362,7 +362,7 @@ func TestChildBatch(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Len(t, batchData.Children, 2)
 
-		// job A
+		// job A depth 1
 		err = processJob(cl, true, func(job *client.Job) {
 			assert.Equal(t, "A", job.Type)
 			batch, err := cl.BatchOpen(batchA.Bid)
@@ -384,7 +384,7 @@ func TestChildBatch(t *testing.T) {
 			assert.Nil(t, err)
 		})
 
-		// job B
+		// job B depth 1
 		err = processJob(cl, true, func(job *client.Job) {
 			assert.Equal(t, "B", job.Type)
 			batch, err := cl.BatchOpen(batchB.Bid)
@@ -406,7 +406,7 @@ func TestChildBatch(t *testing.T) {
 			assert.Nil(t, err)
 		})
 
-		// job A.1
+		// job A.1 depth 2
 		err = processJob(cl, true, func(job *client.Job) {
 			assert.Equal(t, "A.1", job.Type)
 			batch, err := cl.BatchOpen(batchA1.Bid)
@@ -428,7 +428,7 @@ func TestChildBatch(t *testing.T) {
 			assert.Nil(t, err)
 		})
 
-		// job B.1
+		// job B.1 depth 2
 		err = processJob(cl, true, func(job *client.Job) {
 			assert.Equal(t, "B.1", job.Type)
 			batch, err := cl.BatchOpen(batchB1.Bid)
@@ -451,7 +451,7 @@ func TestChildBatch(t *testing.T) {
 		})
 
 
-		// job C.1 relies on D
+		// job C.1 depth 3 relies on D
 		err = processJob(cl, true, func(job *client.Job) {
 			assert.Equal(t, "C.1", job.Type)
 			batch, err := cl.BatchOpen(batchC1.Bid)
@@ -463,7 +463,7 @@ func TestChildBatch(t *testing.T) {
 			assert.Nil(t, err)
 		})
 
-		// job D
+		// job D.1 depth 3 from B.1 / depth 4 from C.1
 		err = processJob(cl, true, func(job *client.Job) {
 			assert.Equal(t, "D.1", job.Type)
 			batch, err := cl.BatchOpen(batchD1.Bid)
