@@ -110,11 +110,43 @@ func (b *BatchSubsystem) loadExistingBatches() error {
 	for idx := range vals {
 		batch, err := b.newBatch(vals[idx], &batchMeta{})
 		if err != nil {
-			util.Warnf("loadExistingBatches: erroring load batch (%s) %v", vals[idx], err)
+			util.Warnf("loadExistingBatches: error load batch (%s) %v", vals[idx], err)
 			continue
 		}
 		b.Batches[vals[idx]] = batch
 	}
+
+	// update parent and children
+	for _, batch := range b.Batches {
+		parentIds, err := b.Server.Manager().Redis().SMembers(batch.ParentsKey).Result()
+		if err != nil {
+			return fmt.Errorf("init: get parents: %v", err)
+		}
+		for _, parentId := range parentIds {
+			parentBatch, err := b.getBatch(parentId)
+			if err != nil {
+				util.Warnf("loadExistingBatches: error getting parent batch (%s) %v", parentId, err)
+				continue
+			}
+			batch.Parents = append(batch.Parents, parentBatch)
+		}
+
+		childIds, err := b.Server.Manager().Redis().SMembers(batch.ChildKey).Result()
+		if err != nil {
+			return fmt.Errorf("init: get parents: %v", err)
+		}
+		for _, childId := range childIds {
+			childBatch, err := b.getBatch(childId)
+			if err != nil {
+				util.Warnf("loadExistingBatches: error getting child batch (%s) %v", childId, err)
+				continue
+			}
+			batch.Children = append(batch.Children, childBatch)
+		}
+
+		batch.checkBatchDone()
+	}
+
 	return nil
 }
 func (b *BatchSubsystem) newBatchMeta(description string, success string, complete string) *batchMeta {
@@ -138,8 +170,12 @@ func (b *BatchSubsystem) newBatch(batchId string, meta *batchMeta) (*batch, erro
 		BatchKey: fmt.Sprintf("batch-%s", batchId),
 		JobsKey:  fmt.Sprintf("jobs-%s", batchId),
 		MetaKey:  fmt.Sprintf("meta-%s", batchId),
+		ParentsKey:  fmt.Sprintf("parent-ids-%s", batchId),
+		ChildKey:  fmt.Sprintf("child-ids-%s", batchId),
 		Workers:  make(map[string]string),
 		Jobs:     make([]string, 0),
+		Parents:  make([]*batch, 0),
+		Children: make([]*batch, 0),
 		Meta:     meta,
 		rclient:  b.Server.Manager().Redis(),
 		mu:       sync.Mutex{},

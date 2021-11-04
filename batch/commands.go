@@ -18,6 +18,17 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		return
 	}
 
+	// worker ids are usually only associated with workers
+	// in order for a client to submit a job to a batch it must pass wid to the payload when submitting HELO
+
+	// to retrieve the worker id for this request
+	// we must access client which is a private field of Connection
+	// use reflection in order to get the worker id that is requesting to open the batch
+	connection := reflect.ValueOf(*c)
+	client := connection.FieldByName("client").Elem()
+
+	wid := client.FieldByName("Wid").String()
+
 	switch batchOperation := parts[0]; batchOperation {
 	case "NEW":
 		var batchRequest NewBatchRequest
@@ -60,17 +71,6 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		return
 	case "OPEN":
 		batchId := parts[1]
-
-		// worker ids are usually only associated with workers
-		// in order for a client to submit a job to a batch it must pass wid to the payload when submitting HELO
-
-		// to retrieve the worker id for this request
-		// we must access client which is a private field of Connection
-		// use reflection in order to get the worker id that is requesting to open the batch
-		connection := reflect.ValueOf(*c)
-		client := connection.FieldByName("client").Elem()
-
-		wid := client.FieldByName("Wid").String()
 		if wid == "" {
 			_ = c.Error(cmd, fmt.Errorf("batches can only be opened from a client with wid set"))
 			return
@@ -87,15 +87,18 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			return
 		}
 
-		if !batch.hasWorker(wid) {
-			_ = c.Error(cmd, fmt.Errorf("this worker is not working on a job in the requested batch"))
-			return
+		if batch.Meta.Committed {
+			if !batch.hasWorker(wid) {
+				_ = c.Error(cmd, fmt.Errorf("this worker is not working on a job in the requested batch"))
+				return
+			}
+			if err := batch.open(); err != nil {
+				_ = c.Error(cmd, fmt.Errorf("cannot open batch: %v", err))
+				return
+			}
 		}
 
-		if err := batch.open(); err != nil {
-			_ = c.Error(cmd, fmt.Errorf("cannot open batch: %v", err))
-			return
-		}
+
 
 		_ = c.Result([]byte(batch.Id))
 		return
@@ -115,6 +118,48 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			_ = c.Error(cmd, fmt.Errorf("cannot commit batch: %v", err))
 			return
 		}
+		_ = c.Ok()
+		return
+	case "CHILD":
+		// BATCH CHILD batchId childId
+		subParts := strings.Split(parts[1], " ")
+		if len(subParts) != 2 {
+			_ = c.Error(cmd, fmt.Errorf("must include child and parent Bid: %s", parts))
+			return
+		}
+		batchId := subParts[0]
+		childBatchId := subParts[1]
+
+		if wid == "" {
+			_ = c.Error(cmd, fmt.Errorf("child batches can only be added from a client with wid set"))
+			return
+		}
+		batch, err := b.getBatch(batchId)
+		if err != nil {
+			_ = c.Error(cmd, fmt.Errorf("cannot get batch: %v", err))
+			return
+		}
+
+		if batch.Meta.Committed {
+			_ = c.Error(cmd, errors.New("batch has already been committed, child batches cannot be added"))
+			return
+		}
+
+		if batch.isBatchDone() {
+			_ = c.Error(cmd, errors.New("batch has already finished"))
+			return
+		}
+
+		childBatch, err := b.getBatch(childBatchId)
+		if err != nil {
+			_ = c.Error(cmd, fmt.Errorf("cannot get child batch: %v", err))
+			return
+		}
+
+		if err := batch.addChild(childBatch); err != nil {
+			_ = c.Error(cmd, fmt.Errorf("cannot add child (%s) to batch (%s): %v", childBatchId, batchId, err))
+		}
+
 		_ = c.Ok()
 		return
 	case "STATUS":
