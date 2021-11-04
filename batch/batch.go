@@ -60,14 +60,14 @@ func (b *batch) init() error {
 		return nil
 	}
 
-	if err := b.Subsystem.Server.Manager().Redis().SAdd("batches", b.Id).Err(); err != nil {
+	if err := b.rclient.SAdd("batches", b.Id).Err(); err != nil {
 		return fmt.Errorf("init: store batch: %v", err)
 	}
 
-	if err := b.Subsystem.Server.Manager().Redis().SetNX(b.BatchKey, b.Id, time.Duration(2*time.Hour)).Err(); err != nil {
+	if err := b.rclient.SetNX(b.BatchKey, b.Id, time.Duration(2*time.Hour)).Err(); err != nil {
 		return fmt.Errorf("init: set expiration: %v", err)
 	}
-	jobs, err := b.Subsystem.Server.Manager().Redis().SMembers(b.JobsKey).Result()
+	jobs, err := b.rclient.SMembers(b.JobsKey).Result()
 	if err != nil {
 		return fmt.Errorf("init: get jobs: %v", err)
 	}
@@ -197,7 +197,7 @@ func (b *batch) hasWorker(wid string) bool {
 
 func (b *batch) remove() error {
 	b.mu.Lock()
-	if err := b.Subsystem.Server.Manager().Redis().SRem("batches", b.Id).Err(); err != nil {
+	if err := b.rclient.SRem("batches", b.Id).Err(); err != nil {
 		return fmt.Errorf("remove: batch (%s) %v", b.Id, err)
 	}
 	if err := b.rclient.Del(b.MetaKey).Err(); err != nil {
@@ -221,22 +221,19 @@ func (b *batch) updateCommitted(committed bool) error {
 	if err := b.rclient.HSet(b.MetaKey, "committed", committed).Err(); err != nil {
 		return fmt.Errorf("updateCommitted: could not update committed: %v", err)
 	}
+
 	if committed {
 		// remove expiration as batch has been committed
-		if err := b.extendBatchExpiration(); err != nil {
-			return fmt.Errorf("updatedCommitted: could not expire: %v", err)
+		if err := b.rclient.Persist(b.BatchKey).Err(); err != nil {
+			return fmt.Errorf("updatedCommitted: could not persist: %v", err)
 		}
 		b.checkBatchDone()
 	} else {
-		if err := b.Subsystem.Server.Manager().Redis().Expire(b.BatchKey, time.Duration(2*time.Hour)).Err(); err != nil {
+		if err := b.rclient.Expire(b.BatchKey, time.Duration(b.Subsystem.Options.UncommittedTimeout)*time.Minute).Err(); err != nil {
 			return fmt.Errorf("updatedCommitted: could not expire: %v", err)
 		}
 	}
 	return nil
-}
-
-func (b *batch) extendBatchExpiration() error {
-	return b.Subsystem.Server.Manager().Redis().Expire(b.BatchKey, time.Duration(b.Subsystem.Options.UncommittedTimeout)*time.Minute).Err()
 }
 
 func (b *batch) updateJobCallbackState(callbackType string, state string) error {
