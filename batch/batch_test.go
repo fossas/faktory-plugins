@@ -44,7 +44,7 @@ func TestBatchSuccess(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		assert.Equal(t, 1, batchData.Meta.Succeeded)
-		assert.False(t, batchData.isBatchCompleted())
+		assert.False(t, batchData.areBatchJobsCompleted())
 
 		// job two
 		err = processJob(cl, true, func(job *client.Job) {
@@ -55,7 +55,7 @@ func TestBatchSuccess(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, 2, batchData.Meta.Succeeded)
 		assert.Equal(t, 0, batchData.Meta.Failed)
-		assert.True(t, batchData.isBatchCompleted())
+		assert.True(t, batchData.areBatchJobsCompleted())
 
 		assert.Equal(t, "1", batchData.Meta.CompleteJobState)
 		assert.Equal(t, "1", batchData.Meta.SuccessJobState)
@@ -108,7 +108,7 @@ func TestBatchCompleteAndEventualSuccess(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		assert.Equal(t, 1, batchData.Meta.Succeeded)
-		assert.False(t, batchData.isBatchCompleted())
+		assert.False(t, batchData.areBatchJobsCompleted())
 		assert.Equal(t, 1, batchData.Meta.Pending)
 
 		// job two
@@ -121,7 +121,7 @@ func TestBatchCompleteAndEventualSuccess(t *testing.T) {
 		assert.Equal(t, 1, batchData.Meta.Succeeded)
 		assert.Equal(t, 1, batchData.Meta.Failed)
 		assert.Equal(t, 0, batchData.Meta.Pending)
-		assert.True(t, batchData.isBatchCompleted())
+		assert.True(t, batchData.areBatchJobsCompleted())
 
 		// done job
 		err = processJob(cl, true, func(job *client.Job) {
@@ -202,7 +202,7 @@ func TestBatchReopen(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		assert.Equal(t, 2, batchData.Meta.Succeeded)
-		assert.False(t, batchData.isBatchCompleted())
+		assert.False(t, batchData.areBatchJobsCompleted())
 
 		// job three
 		err = processJob(cl, true, func(job *client.Job) {
@@ -210,7 +210,7 @@ func TestBatchReopen(t *testing.T) {
 			assert.Equal(t, 0, batchData.Meta.Failed)
 		})
 		assert.Nil(t, err)
-		assert.True(t, batchData.isBatchCompleted())
+		assert.True(t, batchData.areBatchJobsCompleted())
 	})
 }
 
@@ -341,6 +341,7 @@ func TestChildBatch(t *testing.T) {
 			err = b.Push(client.NewJob("B", 2))
 			assert.Nil(t, err)
 			batchB = client.NewBatch(cl)
+			batchB.Description = "B"
 			batchB.Complete = client.NewJob("B.batchDone", 1, "string", 3)
 			batchB.Success = client.NewJob("B.batchSuccess", 2, "string", 4)
 			_, err = cl.BatchNew(batchB)
@@ -461,6 +462,10 @@ func TestChildBatch(t *testing.T) {
 			assert.Equal(t, "D.1", job.Type)
 			batch, err := cl.BatchOpen(batchD1.Bid)
 			assert.Nil(t, err)
+			// circular reference
+			val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", batch.Bid, batchA1.Bid))
+			assert.Equal(t, val, "OK")
+			assert.Nil(t, err)
 			err = batch.Commit()
 			assert.Nil(t, err)
 		})
@@ -469,7 +474,7 @@ func TestChildBatch(t *testing.T) {
 		assert.Equal(t, 2, batchData.Meta.Succeeded)
 		assert.Equal(t, 0, batchData.Meta.Failed)
 		assert.Equal(t, 0, batchData.Meta.Pending)
-		assert.True(t, batchData.isBatchCompleted())
+		assert.True(t, batchData.areBatchJobsCompleted())
 
 		// callback jobs
 		err = processJob(cl, true, func(job *client.Job) {
@@ -549,6 +554,9 @@ func TestChildBatch(t *testing.T) {
 		})
 		assert.Nil(t, err)
 
+		assert.Equal(t, uint64(0), batchSystem.Server.Store().Scheduled().Size())
+		def, _ := batchSystem.Server.Store().GetQueue("default")
+		assert.Equal(t, uint64(0), def.Size())
 	})
 }
 

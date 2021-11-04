@@ -161,7 +161,9 @@ func (b *BatchSubsystem) loadExistingBatches() error {
 			batch.Children = append(batch.Children, childBatch)
 		}
 
-		batch.checkBatchDone()
+		if batch.areBatchJobsCompleted() {
+			batch.handleBatchJobsCompleted()
+		}
 	}
 
 	return nil

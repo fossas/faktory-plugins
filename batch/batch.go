@@ -127,18 +127,17 @@ func (b *batch) init() error {
 }
 
 func (b *batch) commit() error {
-	b.mu.Lock()
 	if err := b.updateCommitted(true); err != nil {
 		return fmt.Errorf("commit: %v", err)
 	}
-	b.mu.Unlock()
+	if b.areBatchJobsCompleted() {
+		b.handleBatchJobsCompleted()
+	}
 	return nil
 }
 
 func (b *batch) open() error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.isBatchCompleted() {
+	if b.areBatchJobsCompleted() {
 		return fmt.Errorf("open: batch job (%s) has already completed", b.Id)
 	}
 	if err := b.updateCommitted(false); err != nil {
@@ -147,42 +146,33 @@ func (b *batch) open() error {
 	return nil
 }
 
-func (b *batch) jobQueued(jobId string) error {
-	b.mu.Lock()
+func (b *batch) handleJobQueued(jobId string) error {
 	if err := b.addJobToBatch(jobId); err != nil {
 		return fmt.Errorf("jobQueued: add job to batch: %v", err)
 	}
-	b.mu.Unlock()
 	return nil
 }
 
-func (b *batch) jobFinished(jobId string, success bool, isRetry bool) error {
-	b.mu.Lock()
+func (b *batch) handleJobFinished(jobId string, success bool, isRetry bool) error {
 	if err := b.removeJobFromBatch(jobId, success, isRetry); err != nil {
 		return fmt.Errorf("jobFinished: %v", err)
 	}
-	b.mu.Unlock()
+	if b.areBatchJobsCompleted() {
+		b.handleBatchJobsCompleted()
+	}
 	return nil
 }
 
-func (b *batch) callbackJobSucceeded(callbackType string) error {
-	b.mu.Lock()
+func (b *batch) handleCallbackJobSucceeded(callbackType string) error {
 	if err := b.updateJobCallbackState(callbackType, CallbackJobSucceeded); err != nil {
 		return fmt.Errorf("callbackJobSucceeded: update callback job state: %v", err)
 	}
-	b.mu.Unlock()
 	return nil
 }
 
 func (b *batch) setWorkerForJid(jid string, wid string) {
 	b.mu.Lock()
 	b.Workers[jid] = wid
-	b.mu.Unlock()
-}
-
-func (b *batch) removeWorkerForJid(jid string) {
-	b.mu.Lock()
-	delete(b.Workers, jid)
 	b.mu.Unlock()
 }
 
@@ -193,6 +183,11 @@ func (b *batch) hasWorker(wid string) bool {
 		}
 	}
 	return false
+}
+func (b *batch) removeWorkerForJid(jid string) {
+	b.mu.Lock()
+	delete(b.Workers, jid)
+	b.mu.Unlock()
 }
 
 func (b *batch) remove() error {
@@ -217,6 +212,8 @@ func (b *batch) remove() error {
 }
 
 func (b *batch) updateCommitted(committed bool) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.Meta.Committed = committed
 	if err := b.rclient.HSet(b.MetaKey, "committed", committed).Err(); err != nil {
 		return fmt.Errorf("updateCommitted: could not update committed: %v", err)
@@ -227,7 +224,6 @@ func (b *batch) updateCommitted(committed bool) error {
 		if err := b.rclient.Persist(b.BatchKey).Err(); err != nil {
 			return fmt.Errorf("updatedCommitted: could not persist: %v", err)
 		}
-		b.checkBatchDone()
 	} else {
 		if err := b.rclient.Expire(b.BatchKey, time.Duration(b.Subsystem.Options.UncommittedTimeout)*time.Minute).Err(); err != nil {
 			return fmt.Errorf("updatedCommitted: could not expire: %v", err)
@@ -237,6 +233,8 @@ func (b *batch) updateCommitted(committed bool) error {
 }
 
 func (b *batch) updateJobCallbackState(callbackType string, state string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if callbackType == "success" {
 		b.Meta.SuccessJobState = state
 		if err := b.rclient.HSet(b.MetaKey, "success_st", state).Err(); err != nil {
@@ -252,6 +250,8 @@ func (b *batch) updateJobCallbackState(callbackType string, state string) error 
 }
 
 func (b *batch) addJobToBatch(jobId string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if err := b.rclient.SAdd(b.JobsKey, jobId).Err(); err != nil {
 		return fmt.Errorf("addJobToBatch: %v", err)
 	}
@@ -268,6 +268,8 @@ func (b *batch) addJobToBatch(jobId string) error {
 }
 
 func (b *batch) removeJobFromBatch(jobId string, success bool, isRetry bool) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if !isRetry {
 		// job has already been removed
 		if err := b.rclient.SRem(b.JobsKey, jobId).Err(); err != nil {
@@ -296,8 +298,6 @@ func (b *batch) removeJobFromBatch(jobId string, success bool, isRetry bool) err
 			return fmt.Errorf("removeJobFromBatch: unable to modify failed: %v", err)
 		}
 	}
-
-	b.checkBatchDone()
 	return nil
 }
 
@@ -320,7 +320,9 @@ func (b *batch) addChild(childBatch *batch) error {
 	if err := childBatch.addParent(b); err != nil {
 		return fmt.Errorf("addChild: erorr adding parent batch (%s) to child (%s): %v", b.Id, childBatch.Id, err)
 	}
-	b.checkBatchDone()
+	if b.areBatchJobsCompleted() {
+		b.handleBatchJobsCompleted()
+	}
 	return nil
 }
 
@@ -344,6 +346,8 @@ func (b *batch) addParent(parentBatch *batch) error {
 }
 
 func (b *batch) removeParent(parentBatch *batch) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	for i, p := range b.Parents {
 		if p.Id == parentBatch.Id {
 			b.Parents = append(b.Parents[:i], b.Parents[i+1:]...)
@@ -356,25 +360,36 @@ func (b *batch) removeParent(parentBatch *batch) error {
 	return nil
 }
 
-func (b *batch) childCompleted(childBatch *batch, areChildrenFinished bool) {
+func (b *batch) removeChildren() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.areChildrenFinished() {
-		if areChildrenFinished {
+	if len(b.Children) > 0 {
+		b.Children = []*batch{}
+		if err := b.rclient.Del(b.ChildKey).Err(); err != nil {
+			util.Warnf("removeChildren: unable to remove child batches from %s: %v", b.Id, err)
+		}
+	}
+}
+
+func (b *batch) handleChildComplete(childBatch *batch, areChildsChildrenFinished bool, visited map[string]bool) {
+	if b.areChildrenFinished(visited) {
+		if areChildsChildrenFinished {
 			// batch can be removed as a parent to stop propagation
 			if err := childBatch.removeParent(b); err != nil {
 				util.Warnf("childCompleted: unable to remove parent (%s) from (%s): %v", b.Id, childBatch.Id, err)
 			}
 		}
-		b.checkBatchDone()
+		if b.areBatchJobsCompleted() {
+			b.handleBatchJobsCompleted()
+		}
 	}
 }
 
-func (b *batch) areChildrenFinished() bool {
+func (b *batch) areChildrenFinished(visited map[string]bool) bool {
 	// iterate through children up to a certain depth
 	// check to see if any batch still has jobs being processed
 	currentDepth := 1
-	visited := map[string]bool{}
+	visited[b.Id] = true // handle circular cases
 	stack := b.Children
 	var childStack []*batch
 	var child *batch
@@ -385,7 +400,7 @@ func (b *batch) areChildrenFinished() bool {
 			goto nextDepth
 		}
 		visited[child.Id] = true
-		if !child.isBatchCompleted() {
+		if !child.areBatchJobsCompleted() {
 			return false
 		}
 		if len(child.Children) > 0 {
@@ -405,34 +420,31 @@ func (b *batch) areChildrenFinished() bool {
 	return true
 }
 
-func (b *batch) isBatchCompleted() bool {
+func (b *batch) areBatchJobsCompleted() bool {
 	return b.Meta.Committed == true && b.Meta.Pending == 0
 }
 
-func (b *batch) checkBatchDone() {
-	if b.isBatchCompleted() {
-		areChildrenFinished := b.areChildrenFinished()
-		if areChildrenFinished {
-			// only create callback jobs if searched children are completed
-			if b.Meta.CompleteJob != "" && b.Meta.CompleteJobState == CallbackJobPending {
-				b.queueBatchDoneJob(b.Meta.CompleteJob, "complete")
-			}
-			if b.Meta.Succeeded == b.Meta.Total && b.Meta.SuccessJob != "" && b.Meta.SuccessJobState == CallbackJobPending {
-				b.queueBatchDoneJob(b.Meta.SuccessJob, "success")
-			}
-
-			// remove children as they are finished
-			// this will reduce the depth parents need to traverse
-			b.Children = []*batch{}
-			if err := b.rclient.Del(b.ChildKey).Err(); err != nil {
-				util.Warnf("checkBatchDone: unable to remove child batches from %s: %v", b.Id, err)
-			}
-		}
-		// notify parents child is done
-		for _, parent := range b.Parents {
-			parent.childCompleted(b, areChildrenFinished)
-		}
+func (b *batch) handleBatchJobsCompleted() {
+	visited := map[string]bool{}
+	areChildrenFinished := b.areChildrenFinished(visited)
+	if areChildrenFinished {
+		b.handleBatchCompleted()
 	}
+	// notify parents child is done
+	for _, parent := range b.Parents {
+		parent.handleChildComplete(b, areChildrenFinished, visited)
+	}
+}
+
+func (b *batch) handleBatchCompleted() {
+	// only create callback jobs if searched children are completed
+	if b.Meta.CompleteJob != "" && b.Meta.CompleteJobState == CallbackJobPending {
+		b.queueBatchDoneJob(b.Meta.CompleteJob, "complete")
+	}
+	if b.Meta.Succeeded == b.Meta.Total && b.Meta.SuccessJob != "" && b.Meta.SuccessJobState == CallbackJobPending {
+		b.queueBatchDoneJob(b.Meta.SuccessJob, "success")
+	}
+	b.removeChildren()
 }
 
 func (b *batch) queueBatchDoneJob(jobData string, callbackType string) {

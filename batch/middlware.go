@@ -36,7 +36,7 @@ func (b *BatchSubsystem) pushMiddleware(next func() error, ctx manager.Context) 
 		if err != nil {
 			return fmt.Errorf("pushMiddleware: unable to get batch %s", bid)
 		}
-		if err := batch.jobQueued(ctx.Job().Jid); err != nil {
+		if err := batch.handleJobQueued(ctx.Job().Jid); err != nil {
 			util.Warnf("unable to add batch %v", err)
 			return fmt.Errorf("pushMiddleware: Unable to add job %s to batch %s", ctx.Job().Jid, bid)
 		}
@@ -81,7 +81,7 @@ func (b *BatchSubsystem) handleJobFinished(success bool) func(next func() error,
 					util.Warnf("Error converting callback job type %s", cb)
 					return next()
 				}
-				if err := batch.callbackJobSucceeded(callbackType); err != nil {
+				if err := batch.handleCallbackJobSucceeded(callbackType); err != nil {
 					util.Warnf("Unable to update batch")
 				}
 				return next()
@@ -102,10 +102,11 @@ func (b *BatchSubsystem) handleJobFinished(success bool) func(next func() error,
 
 			isRetry := ctx.Job().Failure != nil && ctx.Job().Failure.RetryCount > 0
 
-			if err := batch.jobFinished(ctx.Job().Jid, success, isRetry); err != nil {
+			if err := batch.handleJobFinished(ctx.Job().Jid, success, isRetry); err != nil {
 				util.Warnf("error processing finished job for batch %v", err)
 				return fmt.Errorf("handleJobFinished: unable to process finished job %s for batch %s", ctx.Job().Jid, batch.Id)
 			}
+
 
 		}
 		return next()
