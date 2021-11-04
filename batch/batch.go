@@ -14,16 +14,20 @@ import (
 )
 
 type batch struct {
-	Id       string
-	BatchKey string
-	JobsKey  string
-	MetaKey  string
-	Meta     *batchMeta
-	Jobs     []string
-	Workers  map[string]string
-	Server   *server.Server
-	rclient  *redis.Client
-	mu       sync.Mutex
+	Id         string
+	BatchKey   string
+	ChildKey   string
+	ParentsKey string
+	JobsKey    string
+	MetaKey    string
+	Meta       *batchMeta
+	Jobs       []string
+	Parents    []*batch
+	Children   []*batch
+	Workers    map[string]string
+	Server     *server.Server
+	rclient    *redis.Client
+	mu         sync.Mutex
 }
 
 const (
@@ -73,17 +77,17 @@ func (b *batch) init() error {
 	if len(meta) == 0 {
 		// set default values
 		data := map[string]interface{}{
-			"total":        b.Meta.Total,
-			"failed":       b.Meta.Failed,
-			"succeeded":    b.Meta.Succeeded,
-			"pending":      b.Meta.Pending,
-			"created_at":   b.Meta.CreatedAt,
-			"description":  b.Meta.Description,
-			"committed":    b.Meta.Committed,
-			"success_job":  b.Meta.SuccessJob,
-			"complete_job": b.Meta.CompleteJob,
-			"success_st":   b.Meta.SuccessJobState,
-			"complete_st":  b.Meta.CompleteJobState,
+			"total":          b.Meta.Total,
+			"failed":         b.Meta.Failed,
+			"succeeded":      b.Meta.Succeeded,
+			"pending":        b.Meta.Pending,
+			"created_at":     b.Meta.CreatedAt,
+			"description":    b.Meta.Description,
+			"committed":      b.Meta.Committed,
+			"success_job":    b.Meta.SuccessJob,
+			"complete_job":   b.Meta.CompleteJob,
+			"success_st":     b.Meta.SuccessJobState,
+			"complete_st":    b.Meta.CompleteJobState,
 		}
 		b.rclient.HMSet(b.MetaKey, data)
 		return nil
@@ -114,6 +118,9 @@ func (b *batch) init() error {
 	b.Meta.CreatedAt = meta["created_at"]
 	b.Meta.SuccessJob = meta["success_job"]
 	b.Meta.CompleteJob = meta["complete_job"]
+	if b.Meta.SuccessJob == "" && b.Meta.CompleteJob == "" {
+		return fmt.Errorf("init: no callback job was specified for batch %s", b.Id)
+	}
 	b.Meta.SuccessJobState = meta["success_st"]
 	b.Meta.CompleteJobState = meta["complete_st"]
 
@@ -292,8 +299,49 @@ func (b *batch) removeJobFromBatch(jobId string, success bool, isRetry bool) err
 	return nil
 }
 
+func (b *batch) addChild(childBatch *batch) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.Children = append(b.Children, childBatch)
+	if err := b.rclient.SAdd(b.ChildKey, childBatch.Id).Err(); err != nil {
+		return fmt.Errorf("addChild: cannot save child (%s) to batch (%s) %v", childBatch.Id, b.Id, err)
+	}
+	if err := childBatch.addParent(b); err != nil {
+		return fmt.Errorf("addChild: erorr adding parent batch (%s) to child (%s): %v", b.Id, childBatch.Id, err)
+	}
+	b.checkBatchDone()
+	return nil
+}
+
+func (b *batch) addParent(parentBatch *batch) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.Parents = append(b.Parents, parentBatch)
+	if err := b.rclient.SAdd(b.ParentsKey, parentBatch.Id).Err(); err != nil {
+		return fmt.Errorf("addParent: %v", err)
+	}
+	return nil
+}
+
+func (b *batch) childFinished() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.areChildrenFinished() {
+		b.checkBatchDone()
+	}
+}
+
+func (b *batch) areChildrenFinished() bool {
+	for _, child := range b.Children {
+		if !child.isBatchDone() {
+			return false
+		}
+	}
+	return true
+}
+
 func (b *batch) isBatchDone() bool {
-	return b.Meta.Committed == true && b.Meta.Pending == 0
+	return b.Meta.Committed == true && b.Meta.Pending == 0 && b.areChildrenFinished()
 }
 
 func (b *batch) checkBatchDone() {
@@ -303,6 +351,11 @@ func (b *batch) checkBatchDone() {
 		}
 		if b.Meta.Succeeded == b.Meta.Total && b.Meta.SuccessJob != "" && b.Meta.SuccessJobState == CallbackJobPending {
 			b.queueBatchDoneJob(b.Meta.SuccessJob, "success")
+		}
+
+		// notify parents child is done
+		for _, parent := range b.Parents {
+			parent.childFinished()
 		}
 	}
 }
