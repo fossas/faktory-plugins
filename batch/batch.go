@@ -138,8 +138,8 @@ func (b *batch) commit() error {
 func (b *batch) open() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.isBatchDone() {
-		return fmt.Errorf("open: batch job (%s) has already finished", b.Id)
+	if b.isBatchCompleted() {
+		return fmt.Errorf("open: batch job (%s) has already completed", b.Id)
 	}
 	if err := b.updateCommitted(false); err != nil {
 		return fmt.Errorf("open: %v", err)
@@ -364,7 +364,7 @@ func (b *batch) areChildrenFinished() bool {
 			goto nextDepth
 		}
 		visited[child.Id] = true
-		if !child.isBatchDone() {
+		if !child.isBatchCompleted() {
 			return false
 		}
 		if len(child.Children) > 0 {
@@ -384,14 +384,14 @@ func (b *batch) areChildrenFinished() bool {
 	return true
 }
 
-func (b *batch) isBatchDone() bool {
+func (b *batch) isBatchCompleted() bool {
 	return b.Meta.Committed == true && b.Meta.Pending == 0
 }
 
 func (b *batch) checkBatchDone() {
-	if b.isBatchDone() {
+	if b.isBatchCompleted() {
 		if b.areChildrenFinished() {
-			// only create callback jobs if children are considered done
+			// only create callback jobs if searched children are completed
 			if b.Meta.CompleteJob != "" && b.Meta.CompleteJobState == CallbackJobPending {
 				b.queueBatchDoneJob(b.Meta.CompleteJob, "complete")
 			}

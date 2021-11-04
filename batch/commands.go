@@ -82,7 +82,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			return
 		}
 
-		if batch.isBatchDone() {
+		if batch.isBatchCompleted() {
 			_ = c.Error(cmd, errors.New("batch has already finished"))
 			return
 		}
@@ -145,7 +145,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			return
 		}
 
-		if batch.isBatchDone() {
+		if batch.isBatchCompleted() {
 			_ = c.Error(cmd, errors.New("batch has already finished"))
 			return
 		}

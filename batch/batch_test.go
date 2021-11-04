@@ -44,7 +44,7 @@ func TestBatchSuccess(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		assert.Equal(t, 1, batchData.Meta.Succeeded)
-		assert.False(t, batchData.isBatchDone())
+		assert.False(t, batchData.isBatchCompleted())
 
 		// job two
 		err = processJob(cl, true, func(job *client.Job) {
@@ -55,7 +55,7 @@ func TestBatchSuccess(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, 2, batchData.Meta.Succeeded)
 		assert.Equal(t, 0, batchData.Meta.Failed)
-		assert.True(t, batchData.isBatchDone())
+		assert.True(t, batchData.isBatchCompleted())
 
 		assert.Equal(t, "1", batchData.Meta.CompleteJobState)
 		assert.Equal(t, "1", batchData.Meta.SuccessJobState)
@@ -108,7 +108,7 @@ func TestBatchCompleteAndEventualSuccess(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		assert.Equal(t, 1, batchData.Meta.Succeeded)
-		assert.False(t, batchData.isBatchDone())
+		assert.False(t, batchData.isBatchCompleted())
 		assert.Equal(t, 1, batchData.Meta.Pending)
 
 		// job two
@@ -121,7 +121,7 @@ func TestBatchCompleteAndEventualSuccess(t *testing.T) {
 		assert.Equal(t, 1, batchData.Meta.Succeeded)
 		assert.Equal(t, 1, batchData.Meta.Failed)
 		assert.Equal(t, 0, batchData.Meta.Pending)
-		assert.True(t, batchData.isBatchDone())
+		assert.True(t, batchData.isBatchCompleted())
 
 		// done job
 		err = processJob(cl, true, func(job *client.Job) {
@@ -202,7 +202,7 @@ func TestBatchReopen(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		assert.Equal(t, 2, batchData.Meta.Succeeded)
-		assert.False(t, batchData.isBatchDone())
+		assert.False(t, batchData.isBatchCompleted())
 
 		// job three
 		err = processJob(cl, true, func(job *client.Job) {
@@ -210,7 +210,7 @@ func TestBatchReopen(t *testing.T) {
 			assert.Equal(t, 0, batchData.Meta.Failed)
 		})
 		assert.Nil(t, err)
-		assert.True(t, batchData.isBatchDone())
+		assert.True(t, batchData.isBatchCompleted())
 	})
 }
 
@@ -471,7 +471,7 @@ func TestChildBatch(t *testing.T) {
 		assert.Equal(t, 2, batchData.Meta.Succeeded)
 		assert.Equal(t, 0, batchData.Meta.Failed)
 		assert.Equal(t, 0, batchData.Meta.Pending)
-		assert.True(t, batchData.isBatchDone())
+		assert.True(t, batchData.isBatchCompleted())
 
 		// callback jobs
 		err = processJob(cl, true, func(job *client.Job) {
