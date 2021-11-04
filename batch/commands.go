@@ -63,7 +63,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		batch, err := b.newBatch(batchId, meta)
 
 		if err != nil {
-			c.Error(cmd, fmt.Errorf("unable to create batch: %v", err))
+			_ = c.Error(cmd, fmt.Errorf("unable to create batch: %v", err))
 			return
 		}
 
@@ -97,8 +97,6 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 				return
 			}
 		}
-
-
 
 		_ = c.Result([]byte(batch.Id))
 		return
@@ -179,7 +177,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			"success_st":   CallbackJobPending,
 		})
 		if err != nil {
-			c.Error(cmd, fmt.Errorf("unable to marshal batch data: %v", err))
+			_ = c.Error(cmd, fmt.Errorf("unable to marshal batch data: %v", err))
 			return
 		}
 		_ = c.Result([]byte(data))

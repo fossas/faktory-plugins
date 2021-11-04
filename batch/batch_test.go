@@ -349,7 +349,6 @@ func TestChildBatch(t *testing.T) {
 			assert.Nil(t, err)
 			assert.Equal(t, val, "OK")
 
-
 			return nil
 		})
 		assert.Nil(t, err)
@@ -444,7 +443,6 @@ func TestChildBatch(t *testing.T) {
 			})
 			assert.Nil(t, err)
 		})
-
 
 		// job C.1 depth 3 relies on D
 		err = processJob(cl, true, func(job *client.Job) {

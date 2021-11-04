@@ -76,17 +76,17 @@ func (b *batch) init() error {
 	if len(meta) == 0 {
 		// set default values
 		data := map[string]interface{}{
-			"total":          b.Meta.Total,
-			"failed":         b.Meta.Failed,
-			"succeeded":      b.Meta.Succeeded,
-			"pending":        b.Meta.Pending,
-			"created_at":     b.Meta.CreatedAt,
-			"description":    b.Meta.Description,
-			"committed":      b.Meta.Committed,
-			"success_job":    b.Meta.SuccessJob,
-			"complete_job":   b.Meta.CompleteJob,
-			"success_st":     b.Meta.SuccessJobState,
-			"complete_st":    b.Meta.CompleteJobState,
+			"total":        b.Meta.Total,
+			"failed":       b.Meta.Failed,
+			"succeeded":    b.Meta.Succeeded,
+			"pending":      b.Meta.Pending,
+			"created_at":   b.Meta.CreatedAt,
+			"description":  b.Meta.Description,
+			"committed":    b.Meta.Committed,
+			"success_job":  b.Meta.SuccessJob,
+			"complete_job": b.Meta.CompleteJob,
+			"success_st":   b.Meta.SuccessJobState,
+			"complete_st":  b.Meta.CompleteJobState,
 		}
 		b.rclient.HMSet(b.MetaKey, data)
 		return nil
@@ -236,7 +236,7 @@ func (b *batch) updateCommitted(committed bool) error {
 }
 
 func (b *batch) extendBatchExpiration() error {
-	return b.Subsystem.Server.Manager().Redis().Expire(b.BatchKey, time.Duration(b.Subsystem.Options.UncommittedTimeout) * time.Minute).Err()
+	return b.Subsystem.Server.Manager().Redis().Expire(b.BatchKey, time.Duration(b.Subsystem.Options.UncommittedTimeout)*time.Minute).Err()
 }
 
 func (b *batch) updateJobCallbackState(callbackType string, state string) error {
@@ -383,7 +383,6 @@ func (b *batch) areChildrenFinished() bool {
 	var child *batch
 
 	for len(stack) > 0 {
-
 		child, stack = stack[0], stack[1:]
 		if visited[child.Id] {
 			goto nextDepth
@@ -396,15 +395,15 @@ func (b *batch) areChildrenFinished() bool {
 			childStack = append(childStack, child.Children...)
 		}
 
-		nextDepth:
-			if len(stack) == 0 && len(childStack) > 0 {
-				if currentDepth == b.Subsystem.Options.ChildSearchDepth {
-					return true
-				}
-				currentDepth += 1
-				stack = childStack
-				childStack = []*batch{}
+	nextDepth:
+		if len(stack) == 0 && len(childStack) > 0 {
+			if currentDepth == b.Subsystem.Options.ChildSearchDepth {
+				return true
 			}
+			currentDepth += 1
+			stack = childStack
+			childStack = []*batch{}
+		}
 	}
 	return true
 }
