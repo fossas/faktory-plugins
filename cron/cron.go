@@ -109,17 +109,17 @@ func (c *CronSubsystem) createCron() {
 
 func (c *CronSubsystem) addCronJobs() error {
 	for index, _ := range c.Options.CronJobs {
-		job := c.Options.CronJobs[index]
+		job := &c.Options.CronJobs[index]
 		id, err := c.Cron.AddJob(job.Schedule, &QueueJob{
 			Subsystem: c,
-			job:       &job,
+			job:       job,
 		})
 
 		if err != nil {
 			util.Warnf("Unable to start cron plugin: %v", err)
 			return fmt.Errorf("createCron: Unable to start cron plugin: %v", err)
 		}
-		c.Options.CronJobs[index].EntryId = id
+		job.EntryId = id
 	}
 
 	// starts cron if not already running
