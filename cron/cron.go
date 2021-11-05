@@ -3,7 +3,6 @@ package cron
 import (
 	"encoding/json"
 	"fmt"
-	"context"
 	"github.com/DataDog/datadog-go/statsd"
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/server"
@@ -19,24 +18,10 @@ type CronSubsystem struct {
 	statsDClient statsd.ClientInterface
 	Server       *server.Server
 	Options      *Options
-	Cron         CronInterface
+	Cron         *cron.Cron
 	EntryIDs     []cron.EntryID
 }
 
-var _ CronInterface = &cron.Cron{}
-
-type CronInterface interface {
-	AddFunc(spec string, cmd func()) (cron.EntryID, error)
-	AddJob(spec string, cmd cron.Job) (cron.EntryID, error)
-	Schedule(schedule cron.Schedule, cmd cron.Job) cron.EntryID
-	Remove(id cron.EntryID)
-	Entries() []cron.Entry
-	Start()
-	Run()
-	Stop() context.Context
-}
-
-// Options for the plugin
 type Options struct {
 	// Enabled controls whether or not the plugin will function
 	Enabled bool
