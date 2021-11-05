@@ -2,6 +2,9 @@ package cron
 
 import (
 	"fmt"
+	"github.com/fossas/faktory-plugins/cron/mocks"
+	"github.com/golang/mock/gomock"
+	"github.com/robfig/cron/v3"
 	"io/ioutil"
 	"os"
 	"testing"
@@ -216,6 +219,53 @@ func TestCron(t *testing.T) {
 			assert.Len(t, system.Options.CronJobs, 1)
 			assert.Len(t, system.Cron.Entries(), 1)
 			assert.Equal(t, system.Options.CronJobs[0].EntryId, system.Cron.Entries()[0].ID)
+		})
+	})
+
+	t.Run("creates multiple cron jobs", func(t *testing.T) {
+		mockCtrl := gomock.NewController(t)
+		defer mockCtrl.Finish()
+		mockDoer := mocks.NewMockCronInterface(mockCtrl)
+		system := new(CronSubsystem)
+		configDir := createConfigDir(t)
+
+		runSystem(configDir, func(s *server.Server) {
+			cronJobOne := map[string]interface{}{
+				"schedule": "* * * * *",
+				"job": map[string]interface{}{
+					"type": "test_job",
+				},
+			}
+			cronJobTwo := map[string]interface{}{
+				"schedule": "* * * * * *",
+				"job": map[string]interface{}{
+					"type": "test_job_2",
+				},
+			}
+			cronConfig := []map[string]interface{}{cronJobOne, cronJobTwo}
+			s.Options.GlobalConfig["cron"] = cronConfig
+			opts, err := system.getOptions(s)
+			assert.Nil(t, err)
+			system.Options = opts
+			system.Cron = mockDoer
+			mockDoer.EXPECT().Start().Times(1)
+			mockDoer.EXPECT().
+				AddJob("* * * * *", gomock.Any()).
+				Return(cron.EntryID(0), nil).
+				Times(1).
+				Do(func (spec string, job *QueueJob) {
+					assert.Equal(t, "test_job", job.job.Name)
+				})
+			mockDoer.EXPECT().
+				AddJob("* * * * * *", gomock.Any()).
+				Return(cron.EntryID(1), nil).
+				Times(1).
+				Do(func (spec string, job *QueueJob) {
+					assert.Equal(t, "test_job_2", job.job.Name)
+				})
+			err = system.addCronJobs()
+			assert.Nil(t, err)
+
 		})
 	})
 }

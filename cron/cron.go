@@ -3,7 +3,7 @@ package cron
 import (
 	"encoding/json"
 	"fmt"
-
+	"context"
 	"github.com/DataDog/datadog-go/statsd"
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/server"
@@ -13,14 +13,27 @@ import (
 
 var _ server.Subsystem = &CronSubsystem{}
 
-// Cron Subsystem enables cron jobs to queue faktory jobs
+// CronSubsystem enables cron jobs to queue faktory jobs
 // cron jobs are defined in the configuration
 type CronSubsystem struct {
 	statsDClient statsd.ClientInterface
 	Server       *server.Server
 	Options      *Options
-	Cron         *cron.Cron
+	Cron         CronInterface
 	EntryIDs     []cron.EntryID
+}
+
+var _ CronInterface = &cron.Cron{}
+
+type CronInterface interface {
+	AddFunc(spec string, cmd func()) (cron.EntryID, error)
+	AddJob(spec string, cmd cron.Job) (cron.EntryID, error)
+	Schedule(schedule cron.Schedule, cmd cron.Job) cron.EntryID
+	Remove(id cron.EntryID)
+	Entries() []cron.Entry
+	Start()
+	Run()
+	Stop() context.Context
 }
 
 // Options for the plugin
