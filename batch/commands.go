@@ -4,12 +4,25 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/contribsys/faktory/client"
 	"reflect"
 	"strings"
 
 	"github.com/contribsys/faktory/server"
 	"github.com/contribsys/faktory/util"
 )
+
+// NewBatchRequest structure for a new batch request
+// Success and Complete are jobs to be queued
+// once the batch has been committed and all jobs processed
+type NewBatchRequest struct {
+	//	ParentBid   string      `json:"parent_bid,omitempty"`
+	Description      string      `json:"description,omitempty"`
+	Success          *client.Job `json:"success,omitempty"`
+	Complete         *client.Job `json:"complete,omitempty"`
+	ChildSearchDepth *int         `json:"child_search_depth,omitempty"`
+}
+
 
 func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cmd string) {
 	parts := strings.SplitN(cmd, " ", 3)[1:]
@@ -59,7 +72,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			complete = string(completeData)
 		}
 
-		meta := b.newBatchMeta(batchRequest.Description, success, complete)
+		meta := b.newBatchMeta(batchRequest.Description, success, complete, batchRequest.ChildSearchDepth)
 		batch, err := b.newBatch(batchId, meta)
 
 		if err != nil {

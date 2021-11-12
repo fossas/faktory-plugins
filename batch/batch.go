@@ -50,6 +50,7 @@ type batchMeta struct {
 	CompleteJob      string
 	SuccessJobState  string
 	CompleteJobState string
+	ChildSearchDepth *int
 }
 
 func (b *batch) init() error {
@@ -76,17 +77,20 @@ func (b *batch) init() error {
 	if len(meta) == 0 {
 		// set default values
 		data := map[string]interface{}{
-			"total":        b.Meta.Total,
-			"failed":       b.Meta.Failed,
-			"succeeded":    b.Meta.Succeeded,
-			"pending":      b.Meta.Pending,
-			"created_at":   b.Meta.CreatedAt,
-			"description":  b.Meta.Description,
-			"committed":    b.Meta.Committed,
-			"success_job":  b.Meta.SuccessJob,
-			"complete_job": b.Meta.CompleteJob,
-			"success_st":   b.Meta.SuccessJobState,
-			"complete_st":  b.Meta.CompleteJobState,
+			"total":              b.Meta.Total,
+			"failed":             b.Meta.Failed,
+			"succeeded":          b.Meta.Succeeded,
+			"pending":            b.Meta.Pending,
+			"created_at":         b.Meta.CreatedAt,
+			"description":        b.Meta.Description,
+			"committed":          b.Meta.Committed,
+			"success_job":        b.Meta.SuccessJob,
+			"complete_job":       b.Meta.CompleteJob,
+			"success_st":         b.Meta.SuccessJobState,
+			"complete_st":        b.Meta.CompleteJobState,
+		}
+		if b.Meta.ChildSearchDepth != nil {
+			data["child_search_depth"] = &b.Meta.ChildSearchDepth
 		}
 		b.rclient.HMSet(b.MetaKey, data)
 		return nil
@@ -122,6 +126,14 @@ func (b *batch) init() error {
 	}
 	b.Meta.SuccessJobState = meta["success_st"]
 	b.Meta.CompleteJobState = meta["complete_st"]
+	if childSearchDepth, ok := meta["child_search_depth"]; ok {
+		depth, err := strconv.Atoi(childSearchDepth)
+		if err != nil {
+			util.Warnf("Unable to set childSearchDepth for batch: %s", b.Id)
+		} else {
+			b.Meta.ChildSearchDepth = &depth
+		}
+	}
 
 	return nil
 }

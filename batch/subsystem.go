@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/manager"
 	"github.com/contribsys/faktory/server"
 	"github.com/contribsys/faktory/util"
@@ -23,16 +22,6 @@ type BatchSubsystem struct {
 	mu      sync.Mutex
 	Fetcher manager.Fetcher
 	Options *Options
-}
-
-// NewBatchRequest structure for a new batch request
-// Success and Complete are jobs to be queued
-// once the batch has been committed and all jobs processed
-type NewBatchRequest struct {
-	//	ParentBid   string      `json:"parent_bid,omitempty"`
-	Description string      `json:"description,omitempty"`
-	Success     *client.Job `json:"success,omitempty"`
-	Complete    *client.Job `json:"complete,omitempty"`
 }
 
 type Options struct {
@@ -168,7 +157,7 @@ func (b *BatchSubsystem) loadExistingBatches() error {
 
 	return nil
 }
-func (b *BatchSubsystem) newBatchMeta(description string, success string, complete string) *batchMeta {
+func (b *BatchSubsystem) newBatchMeta(description string, success string, complete string, childSearchDepth *int) *batchMeta {
 	return &batchMeta{
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339Nano),
 		Total:            0,
@@ -180,6 +169,7 @@ func (b *BatchSubsystem) newBatchMeta(description string, success string, comple
 		CompleteJob:      complete,
 		SuccessJobState:  CallbackJobPending,
 		CompleteJobState: CallbackJobPending,
+		ChildSearchDepth: childSearchDepth,
 	}
 }
 
