@@ -97,7 +97,12 @@ func (b *batch) areChildrenFinished(visited map[string]bool) bool {
 	stack := b.Children
 	var childStack []*batch
 	var child *batch
-
+	var maxSearchDepth int
+	if b.Meta.ChildSearchDepth != nil {
+		maxSearchDepth = *b.Meta.ChildSearchDepth
+	} else {
+		maxSearchDepth = b.Subsystem.Options.ChildSearchDepth
+	}
 	for len(stack) > 0 {
 		child, stack = stack[0], stack[1:]
 		if visited[child.Id] {
@@ -113,7 +118,7 @@ func (b *batch) areChildrenFinished(visited map[string]bool) bool {
 
 	nextDepth:
 		if len(stack) == 0 && len(childStack) > 0 {
-			if currentDepth == b.Subsystem.Options.ChildSearchDepth {
+			if currentDepth == maxSearchDepth {
 				return true
 			}
 			currentDepth += 1
