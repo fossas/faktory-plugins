@@ -72,12 +72,13 @@ func (m *metricsTask) Execute() error {
 			}
 			return nil
 		})
-
+		util.Debugf("metrics: enqueued.%s.count: %d", queue.Name(), count)
 	})
 
 	if err := m.Subsystem.StatsDClient().Count(m.Subsystem.PrefixMetricName("enqueued.count"), int64(totalEnqueued), m.Subsystem.Options.Tags, 1); err != nil {
 		util.Warnf("unable to submit metric: %v", err)
 	}
+	util.Debugf("metrics: enqueued.count: %d", totalEnqueued)
 
 	return nil
 }
