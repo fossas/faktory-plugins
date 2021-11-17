@@ -107,23 +107,20 @@ func TestMetrics(t *testing.T) {
 
 			// middleware jobs
 			tags := []string{"tag1:value1", "tag2:value2"}
-			mockDoer.EXPECT().Incr("jobs.succeeded.count", gomock.Any(), gomock.Any()).Return(nil).Times(3)
 			mockDoer.EXPECT().Timing("jobs.succeeded.time", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(3)
-			// one of the failed jobs has a retry value > 0
-			mockDoer.EXPECT().Incr("jobs.failed.count", gomock.Any(), gomock.Any()).Return(nil).Times(2)
 			mockDoer.EXPECT().Timing("jobs.failed.time", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(3)
 
 			// task calls
-			mockDoer.EXPECT().Count("jobs.working.count", int64(0), gomock.Any(), gomock.Any()).Return(nil).Times(1)
-			mockDoer.EXPECT().Count("jobs.scheduled.count", int64(1), gomock.Any(), gomock.Any()).Return(nil).Times(1)
-			mockDoer.EXPECT().Count("jobs.retries.count", int64(1), gomock.Any(), gomock.Any()).Return(nil).Times(1)
-			mockDoer.EXPECT().Count("jobs.dead.count", int64(0), gomock.Any(), gomock.Any()).Return(nil).Times(1)
-			mockDoer.EXPECT().Count("jobs.enqueued.count", int64(8), tags, gomock.Any()).Return(nil).Times(1)
-			mockDoer.EXPECT().Count("jobs.enqueued.default.count", int64(1), tags, gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("jobs.working.count", float64(0), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("jobs.scheduled.count", float64(1), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("jobs.retries.count", float64(1), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("jobs.dead.count", float64(0), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("jobs.enqueued.count", float64(8), tags, gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("jobs.enqueued.default.count", float64(1), tags, gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.enqueued.default.time", gomock.Any(), tags, gomock.Any()).Return(nil).Times(1)
-			mockDoer.EXPECT().Count("jobs.enqueued.builds.count", int64(6), tags, gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("jobs.enqueued.builds.count", float64(6), tags, gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.enqueued.builds.time", gomock.Any(), tags, gomock.Any()).Return(nil).Times(1)
-			mockDoer.EXPECT().Count("jobs.enqueued.tests.count", int64(1), tags, gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("jobs.enqueued.tests.count", float64(1), tags, gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.enqueued.tests.time", gomock.Any(), tags, gomock.Any()).Return(nil).Times(1)
 
 			// create 15 jobs
