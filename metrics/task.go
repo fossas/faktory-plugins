@@ -49,10 +49,13 @@ func (m *metricsTask) Execute() error {
 	m.Subsystem.Server.Store().EachQueue(func(queue storage.Queue) {
 		count := queue.Size()
 		totalEnqueued += count
-		metricName := m.Subsystem.PrefixMetricName(fmt.Sprintf("enqueued.%s.count", queue.Name()))
-		if err := m.Subsystem.StatsDClient().Gauge(metricName, float64(count), m.Subsystem.Options.Tags, 1); err != nil {
+		queueCountMetricName := m.Subsystem.PrefixMetricName(fmt.Sprintf("enqueued.%s.count", queue.Name()))
+		if err := m.Subsystem.StatsDClient().Gauge(queueCountMetricName, float64(count), m.Subsystem.Options.Tags, 1); err != nil {
 			util.Warnf("unable to submit metric: %v", err)
 		}
+
+		queueLatencyMetricName := m.Subsystem.PrefixMetricName(fmt.Sprintf("enqueued.%s.time", queue.Name()))
+		var timeElapsed int64 = 0
 		// This does an LRANGE on the queue
 		// start is the offset from the left of the queue
 		// count is not the number of items to fetch, but rather the offset to the last item to return
@@ -69,17 +72,16 @@ func (m *metricsTask) Execute() error {
 				util.Warnf("metrics task unable to parse EnqueuedAt: %v", err)
 				return nil
 			}
-
-			metricName := m.Subsystem.PrefixMetricName(fmt.Sprintf("enqueued.%s.time", job.Queue))
-			timeElapsed := time.Duration(time.Now().Sub(t)).Milliseconds()
-			if err := m.Subsystem.StatsDClient().Gauge(metricName, float64(timeElapsed), m.Subsystem.Options.Tags, 1); err != nil {
-				util.Warnf("unable to submit metric: %v", err)
-			}
-			util.Debugf("metrics: %s: %d", metricName, timeElapsed)
+			timeElapsed = time.Duration(time.Now().Sub(t)).Milliseconds()
 
 			return nil
 		})
-		util.Debugf("metrics: enqueued.%s.count: %d", queue.Name(), count)
+		if err := m.Subsystem.StatsDClient().Gauge(queueLatencyMetricName, float64(timeElapsed), m.Subsystem.Options.Tags, 1); err != nil {
+			util.Warnf("unable to submit metric: %v", err)
+		}
+
+		util.Debugf("metrics: %s: %d", queueCountMetricName, count)
+		util.Debugf("metrics: %s: %d", queueLatencyMetricName, timeElapsed)
 	})
 
 	if err := m.Subsystem.StatsDClient().Gauge(m.Subsystem.PrefixMetricName("enqueued.count"), float64(totalEnqueued), m.Subsystem.Options.Tags, 1); err != nil {
