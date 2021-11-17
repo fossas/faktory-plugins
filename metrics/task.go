@@ -25,22 +25,22 @@ func (m *metricsTask) Name() string {
 // Execute - runs the task to collect metrics
 func (m *metricsTask) Execute() error {
 	workingCount := m.Subsystem.Server.Store().Working().Size()
-	if err := m.Subsystem.StatsDClient().Count(m.Subsystem.PrefixMetricName("working.count"), int64(workingCount), m.Subsystem.Options.Tags, 1); err != nil {
+	if err := m.Subsystem.StatsDClient().Gauge(m.Subsystem.PrefixMetricName("working.count"), float64(workingCount), m.Subsystem.Options.Tags, 1); err != nil {
 		util.Warnf("unable to submit metric: %v", err)
 	}
 
 	scheduledCount := m.Subsystem.Server.Store().Scheduled().Size()
-	if err := m.Subsystem.StatsDClient().Count(m.Subsystem.PrefixMetricName("scheduled.count"), int64(scheduledCount), m.Subsystem.Options.Tags, 1); err != nil {
+	if err := m.Subsystem.StatsDClient().Gauge(m.Subsystem.PrefixMetricName("scheduled.count"), float64(scheduledCount), m.Subsystem.Options.Tags, 1); err != nil {
 		util.Warnf("unable to submit metric: %v", err)
 	}
 
 	retriesCount := m.Subsystem.Server.Store().Retries().Size()
-	if err := m.Subsystem.StatsDClient().Count(m.Subsystem.PrefixMetricName("retries.count"), int64(retriesCount), m.Subsystem.Options.Tags, 1); err != nil {
+	if err := m.Subsystem.StatsDClient().Gauge(m.Subsystem.PrefixMetricName("retries.count"), float64(retriesCount), m.Subsystem.Options.Tags, 1); err != nil {
 		util.Warnf("unable to submit metric: %v", err)
 	}
 
 	deadCount := m.Subsystem.Server.Store().Dead().Size()
-	if err := m.Subsystem.StatsDClient().Count(m.Subsystem.PrefixMetricName("dead.count"), int64(deadCount), m.Subsystem.Options.Tags, 1); err != nil {
+	if err := m.Subsystem.StatsDClient().Gauge(m.Subsystem.PrefixMetricName("dead.count"), float64(deadCount), m.Subsystem.Options.Tags, 1); err != nil {
 		util.Warnf("unable to submit metric: %v", err)
 	}
 
@@ -50,32 +50,39 @@ func (m *metricsTask) Execute() error {
 		count := queue.Size()
 		totalEnqueued += count
 		metricName := m.Subsystem.PrefixMetricName(fmt.Sprintf("enqueued.%s.count", queue.Name()))
-		if err := m.Subsystem.StatsDClient().Count(metricName, int64(count), m.Subsystem.Options.Tags, 1); err != nil {
+		if err := m.Subsystem.StatsDClient().Gauge(metricName, float64(count), m.Subsystem.Options.Tags, 1); err != nil {
 			util.Warnf("unable to submit metric: %v", err)
 		}
-		// count=0 will pull exactly 1 job
-		queue.Page(0, 0, func(index int, e []byte) error {
+		// This does an LRANGE on the queue
+		// start is the offset from the left of the queue
+		// count is not the number of items to fetch, but rather the offset to the last item to return
+		// Jobs are LPUSH'd into the queue and RPOP'd out, so to get the last job we want -1, -1
+		queue.Page(-1, 0, func(_ int, data []byte) error {
 			var job client.Job
-			if err := json.Unmarshal(e, &job); err != nil {
+			if err := json.Unmarshal(data, &job); err != nil {
 				util.Warnf("metrics task unable to unmarshal job data: %v", err)
 				return nil
 			}
+
 			t, err := util.ParseTime(job.EnqueuedAt)
 			if err != nil {
 				util.Warnf("metrics task unable to parse EnqueuedAt: %v", err)
 				return nil
 			}
+
 			metricName := m.Subsystem.PrefixMetricName(fmt.Sprintf("enqueued.%s.time", job.Queue))
 			timeElapsed := time.Duration(time.Now().Sub(t)).Milliseconds()
 			if err := m.Subsystem.StatsDClient().Gauge(metricName, float64(timeElapsed), m.Subsystem.Options.Tags, 1); err != nil {
 				util.Warnf("unable to submit metric: %v", err)
 			}
+			util.Debugf("metrics: %s: %d", metricName, timeElapsed)
+
 			return nil
 		})
 		util.Debugf("metrics: enqueued.%s.count: %d", queue.Name(), count)
 	})
 
-	if err := m.Subsystem.StatsDClient().Count(m.Subsystem.PrefixMetricName("enqueued.count"), int64(totalEnqueued), m.Subsystem.Options.Tags, 1); err != nil {
+	if err := m.Subsystem.StatsDClient().Gauge(m.Subsystem.PrefixMetricName("enqueued.count"), float64(totalEnqueued), m.Subsystem.Options.Tags, 1); err != nil {
 		util.Warnf("unable to submit metric: %v", err)
 	}
 	util.Debugf("metrics: enqueued.count: %d", totalEnqueued)
