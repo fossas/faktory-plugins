@@ -30,7 +30,9 @@ type Options struct {
 	// ChildSearchDepth - the n-th depth/level at which a batch will check if a child batch is done
 	ChildSearchDepth int
 	// UncommittedTimeout - number of minutes a batch is set to expire before committed
-	UncommittedTimeout int
+	UncommittedTimeoutMinutes int
+	// CommittedTimeout - number of days long a can exist after its been commited
+	CommittedTimeoutDays int
 }
 
 // Start - configures the batch subsystem
@@ -74,15 +76,19 @@ func (b *BatchSubsystem) getOptions(s *server.Server) *Options {
 		childSearchDepth = 0
 	}
 
-	uncommittedTimeoutValue := s.Options.Config("batch", "uncommitted_timeout", 120)
+	uncommittedTimeoutValue := s.Options.Config("batch", "uncommitted_timeout_minutes", 120)
 	uncommittedTimeout, ok := uncommittedTimeoutValue.(int)
+
+	committedTimeoutValue := s.Options.Config("batch", "committed_timeout_days", 7)
+	committedTimeout, ok := committedTimeoutValue.(int)
 	if !ok {
 		uncommittedTimeout = 120
 	}
 	return &Options{
 		Enabled:            enabled,
 		ChildSearchDepth:   childSearchDepth,
-		UncommittedTimeout: uncommittedTimeout,
+		UncommittedTimeoutMinutes: uncommittedTimeout,
+		CommittedTimeoutDays: committedTimeout,
 	}
 }
 

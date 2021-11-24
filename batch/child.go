@@ -3,6 +3,7 @@ package batch
 import (
 	"fmt"
 	"github.com/contribsys/faktory/util"
+	"time"
 )
 
 func (b *batch) addChild(childBatch *batch) error {
@@ -20,6 +21,12 @@ func (b *batch) addChild(childBatch *batch) error {
 	b.Children = append(b.Children, childBatch)
 	if err := b.rclient.SAdd(b.ChildKey, childBatch.Id).Err(); err != nil {
 		return fmt.Errorf("addChild: cannot save child (%s) to batch (%s) %v", childBatch.Id, b.Id, err)
+	}
+	if len(b.Children) == 1 {
+		// only set expire when adding the first child
+		if err := b.rclient.Expire(b.ChildKey, time.Duration(b.Subsystem.Options.CommittedTimeoutDays)*time.Hour*24).Err(); err != nil {
+			util.Warnf("addChild: could not set expiration for set storing batch children: %v", err)
+		}
 	}
 	if err := childBatch.addParent(b); err != nil {
 		return fmt.Errorf("addChild: erorr adding parent batch (%s) to child (%s): %v", b.Id, childBatch.Id, err)
@@ -45,6 +52,12 @@ func (b *batch) addParent(parentBatch *batch) error {
 	b.Parents = append(b.Parents, parentBatch)
 	if err := b.rclient.SAdd(b.ParentsKey, parentBatch.Id).Err(); err != nil {
 		return fmt.Errorf("addParent: %v", err)
+	}
+	if len(b.Parents) == 1 {
+		// only set expire when adding the first parent
+		if err := b.rclient.Expire(b.ParentsKey, time.Duration(b.Subsystem.Options.CommittedTimeoutDays)*time.Hour*24).Err(); err != nil {
+			util.Warnf("addChild: could not set expiration for set storing batch children: %v", err)
+		}
 	}
 	return nil
 }

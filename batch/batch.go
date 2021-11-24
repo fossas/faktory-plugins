@@ -232,12 +232,12 @@ func (b *batch) updateCommitted(committed bool) error {
 	}
 
 	if committed {
-		// remove expiration as batch has been committed
-		if err := b.rclient.Persist(b.BatchKey).Err(); err != nil {
-			return fmt.Errorf("updatedCommitted: could not persist: %v", err)
+		// number of days a batch can exist
+		if err := b.rclient.Expire(b.BatchKey, time.Duration(b.Subsystem.Options.CommittedTimeoutDays)*time.Hour*24).Err(); err != nil {
+			return fmt.Errorf("updatedCommitted: could not not expire after committed: %v", err)
 		}
 	} else {
-		if err := b.rclient.Expire(b.BatchKey, time.Duration(b.Subsystem.Options.UncommittedTimeout)*time.Minute).Err(); err != nil {
+		if err := b.rclient.Expire(b.BatchKey, time.Duration(b.Subsystem.Options.UncommittedTimeoutMinutes)*time.Minute).Err(); err != nil {
 			return fmt.Errorf("updatedCommitted: could not expire: %v", err)
 		}
 	}
@@ -276,6 +276,12 @@ func (b *batch) addJobToBatch(jobId string) error {
 		return fmt.Errorf("addJobToBatch: unable to modify pending: %v", err)
 	}
 	b.Jobs = append(b.Jobs, jobId)
+	if len(b.Jobs) == 1 {
+		// only set expire when adding the first job
+		if err := b.rclient.Expire(b.JobsKey, time.Duration(b.Subsystem.Options.CommittedTimeoutDays)*time.Hour*24).Err(); err != nil {
+			util.Warnf("addChild: could not set expiration for set storing batch children: %v", err)
+		}
+	}
 	return nil
 }
 
