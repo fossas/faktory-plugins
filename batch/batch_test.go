@@ -697,9 +697,9 @@ func TestBatchOptions(t *testing.T) {
 }
 
 func withServer(batchSystem *BatchSubsystem, enabled bool, runner func(cl *client.Client)) {
-	dir := "/tmp/batching_system.db"
+	dir := "/tmp/batching_test.db"
 	defer os.RemoveAll(dir)
-	opts := &cli.CliOptions{"localhost:7418", "localhost:7420", "development", ".", "debug", dir}
+	opts := &cli.CliOptions{"localhost:7417", "localhost:7420", "development", ".", "debug", dir}
 	s, stopper, err := cli.BuildServer(opts)
 
 	if err != nil {
@@ -742,7 +742,7 @@ func getClient() (*client.Client, error) {
 	client.RandomProcessWid = strconv.FormatInt(rand.Int63(), 32)
 
 	srv := client.DefaultServer()
-	srv.Address = "localhost:7418"
+	srv.Address = "localhost:7417"
 	cl, err := client.Dial(srv, "123456")
 	if err != nil {
 		return nil, err
