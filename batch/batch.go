@@ -98,24 +98,24 @@ func (b *batch) init() error {
 
 	b.Meta.Total, err = strconv.Atoi(meta["total"])
 	if err != nil {
-		return fmt.Errorf("init: failed converting string to int: %v", err)
+		return fmt.Errorf("init: total: failed converting string to int: %v", err)
 	}
 	b.Meta.Failed, err = strconv.Atoi(meta["failed"])
 	if err != nil {
-		return fmt.Errorf("init: failed converting string to int: %v", err)
+		return fmt.Errorf("init: failed: failed converting string to int: %v", err)
 	}
 	b.Meta.Succeeded, err = strconv.Atoi(meta["succeeded"])
 	if err != nil {
-		return fmt.Errorf("init: failed converting string to int: %v", err)
+		return fmt.Errorf("init: succeeded: failed converting string to int: %v", err)
 	}
 	b.Meta.Pending, err = strconv.Atoi(meta["pending"])
 	if err != nil {
-		return fmt.Errorf("init: failed converting string to int: %v", err)
+		return fmt.Errorf("init: pending: failed converting string to int: %v", err)
 	}
 
 	b.Meta.Committed, err = strconv.ParseBool(meta["committed"])
 	if err != nil {
-		return fmt.Errorf("init: failed converting string to bool: %v", err)
+		return fmt.Errorf("init: committed: failed converting string to bool: %v", err)
 	}
 	b.Meta.Description = meta["description"]
 	b.Meta.CreatedAt = meta["created_at"]
