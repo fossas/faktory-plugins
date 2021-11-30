@@ -352,7 +352,9 @@ func (b *batch) queueBatchDoneJob(jobData string, callbackType string) {
 		util.Warnf("queueBatchDoneJob: unmarshal job(%s): %v", callbackType, err)
 		return
 	}
-	job.Jid = fmt.Sprintf("%s-%s", b.Id, callbackType)
+	if job.Jid == "" {
+		job.Jid = fmt.Sprintf("%s-%s", b.Id, callbackType)
+	}
 	// these are required to update the call back job state
 	job.SetCustom("_bid", b.Id)
 	job.SetCustom("_cb", callbackType)
