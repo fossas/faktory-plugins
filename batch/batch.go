@@ -121,9 +121,6 @@ func (b *batch) init() error {
 	b.Meta.CreatedAt = meta["created_at"]
 	b.Meta.SuccessJob = meta["success_job"]
 	b.Meta.CompleteJob = meta["complete_job"]
-	if b.Meta.SuccessJob == "" && b.Meta.CompleteJob == "" {
-		return fmt.Errorf("init: no callback job was specified for batch %s", b.Id)
-	}
 	b.Meta.SuccessJobState = meta["success_st"]
 	b.Meta.CompleteJobState = meta["complete_st"]
 	if childSearchDepth, ok := meta["child_search_depth"]; ok {
