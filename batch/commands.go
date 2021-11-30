@@ -38,9 +38,9 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 	// we must access client which is a private field of Connection
 	// use reflection in order to get the worker id that is requesting to open the batch
 	connection := reflect.ValueOf(*c)
-	client := connection.FieldByName("client").Elem()
+	cl := connection.FieldByName("client").Elem()
 
-	wid := client.FieldByName("Wid").String()
+	wid := cl.FieldByName("Wid").String()
 
 	switch batchOperation := parts[0]; batchOperation {
 	case "NEW":
