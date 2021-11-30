@@ -90,9 +90,11 @@ func (b *batch) init() error {
 			"complete_st":        b.Meta.CompleteJobState,
 		}
 		if b.Meta.ChildSearchDepth != nil {
-			data["child_search_depth"] = &b.Meta.ChildSearchDepth
+			data["child_search_depth"] = *b.Meta.ChildSearchDepth
 		}
-		b.rclient.HMSet(b.MetaKey, data)
+		if err := b.rclient.HMSet(b.MetaKey, data).Err(); err != nil {
+			return fmt.Errorf("init: could not load meta for batch: %s: %v", b.Id, err)
+		}
 		return nil
 	}
 
