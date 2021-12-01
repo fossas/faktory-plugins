@@ -85,10 +85,10 @@ func (b *BatchSubsystem) getOptions(s *server.Server) *Options {
 		uncommittedTimeout = 120
 	}
 	return &Options{
-		Enabled:            enabled,
-		ChildSearchDepth:   childSearchDepth,
+		Enabled:                   enabled,
+		ChildSearchDepth:          childSearchDepth,
 		UncommittedTimeoutMinutes: uncommittedTimeout,
-		CommittedTimeoutDays: committedTimeout,
+		CommittedTimeoutDays:      committedTimeout,
 	}
 }
 
