@@ -54,8 +54,6 @@ type batchMeta struct {
 }
 
 func (b *batch) init() error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	meta, err := b.rclient.HGetAll(b.MetaKey).Result()
 	if err != nil {
 		return nil

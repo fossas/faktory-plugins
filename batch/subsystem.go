@@ -180,6 +180,8 @@ func (b *BatchSubsystem) newBatchMeta(description string, success string, comple
 }
 
 func (b *BatchSubsystem) newBatch(batchId string, meta *batchMeta) (*batch, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	batch := &batch{
 		Id:         batchId,
 		BatchKey:   fmt.Sprintf("batch-%s", batchId),
