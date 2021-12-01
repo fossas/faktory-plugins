@@ -1,32 +1,11 @@
 package batch
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/contribsys/faktory/manager"
 	"github.com/contribsys/faktory/util"
 )
-
-// Fetch - wraps around Fetch (which retrieves a job)
-// faktory does not expose the workerId (Wid) in middleware
-// workerId is needed when a worker tries to re-open a batch
-func (b *BatchSubsystem) Fetch(ctx context.Context, wid string, queues ...string) (manager.Lease, error) {
-	lease, err := b.Fetcher.Fetch(ctx, wid, queues...)
-	if err == nil && lease != manager.Nothing {
-		job, err := lease.Job()
-		if err == nil && job != nil {
-			if bid, ok := job.GetCustom("bid"); ok {
-				batch, err := b.getBatchFromInterface(bid)
-				if err != nil {
-					return nil, fmt.Errorf("fetch: unable to retrieve batch %s", bid)
-				}
-				batch.setWorkerForJid(job.Jid, wid)
-			}
-		}
-	}
-	return lease, err
-}
 
 func (b *BatchSubsystem) pushMiddleware(next func() error, ctx manager.Context) error {
 	if bid, ok := ctx.Job().GetCustom("bid"); ok {
@@ -41,21 +20,6 @@ func (b *BatchSubsystem) pushMiddleware(next func() error, ctx manager.Context) 
 		util.Infof("Added %s to batch %s", ctx.Job().Jid, batch.Id)
 	}
 	return next()
-}
-
-func (b *BatchSubsystem) fetchMiddleware(next func() error, ctx manager.Context) error {
-	middlewareErr := next() // runs the rest of the middleware
-	if bid, ok := ctx.Job().GetCustom("bid"); ok {
-		batch, err := b.getBatchFromInterface(bid)
-		if err != nil {
-			return fmt.Errorf("fetchMiddleware: unable to retrieve batch %s", bid)
-		}
-		if middlewareErr != nil {
-			// clear the worker id for a job since the worker id was added in the custom fetcher
-			batch.removeWorkerForJid(ctx.Job().Jid)
-		}
-	}
-	return middlewareErr
 }
 
 func (b *BatchSubsystem) handleJobFinished(success bool) func(next func() error, ctx manager.Context) error {
@@ -94,8 +58,7 @@ func (b *BatchSubsystem) handleJobFinished(success bool) func(next func() error,
 			if !success {
 				status = "failed"
 			}
-			util.Infof("Job %s (worker %s) %s for batch %s", ctx.Job().Jid, ctx.Reservation().Wid, status, batch.Id)
-			batch.removeWorkerForJid(ctx.Job().Jid)
+			util.Infof("Job(%s) %s for batch %s", ctx.Job().Jid, status, batch.Id)
 
 			isRetry := ctx.Job().Failure != nil && ctx.Job().Failure.RetryCount > 0
 

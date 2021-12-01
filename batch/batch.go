@@ -23,7 +23,6 @@ type batch struct {
 	Jobs       []string
 	Parents    []*batch
 	Children   []*batch
-	Workers    map[string]string
 	Subsystem  *BatchSubsystem
 	rclient    *redis.Client
 	mu         sync.Mutex
@@ -177,26 +176,6 @@ func (b *batch) handleCallbackJobSucceeded(callbackType string) error {
 		return fmt.Errorf("callbackJobSucceeded: update callback job state: %v", err)
 	}
 	return nil
-}
-
-func (b *batch) setWorkerForJid(jid string, wid string) {
-	b.mu.Lock()
-	b.Workers[jid] = wid
-	b.mu.Unlock()
-}
-
-func (b *batch) hasWorker(wid string) bool {
-	for _, worker := range b.Workers {
-		if worker == wid {
-			return true
-		}
-	}
-	return false
-}
-func (b *batch) removeWorkerForJid(jid string) {
-	b.mu.Lock()
-	delete(b.Workers, jid)
-	b.mu.Unlock()
 }
 
 func (b *batch) remove() error {

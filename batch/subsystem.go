@@ -14,8 +14,6 @@ import (
 // BatchSubsystem enables jobs to be grouped into a batch
 // the implementation follows the spec here: https://github.com/contribsys/faktory/wiki/Ent-Batches
 // Except child batches, which are not implemented
-// for a client to re-open a batch it must have a WID (worker id) applied to it
-// that worker must be processing a job within the batch
 type BatchSubsystem struct {
 	Server  *server.Server
 	Batches map[string]*batch
@@ -93,10 +91,7 @@ func (b *BatchSubsystem) getOptions(s *server.Server) *Options {
 }
 
 func (b *BatchSubsystem) addMiddleware() {
-	// we have to set a custom fetcher in order to set the worker id for a job
-	b.Server.Manager().SetFetcher(b)
 	b.Server.Manager().AddMiddleware("push", b.pushMiddleware)
-	b.Server.Manager().AddMiddleware("fetch", b.fetchMiddleware)
 	b.Server.Manager().AddMiddleware("ack", b.handleJobFinished(true))
 	b.Server.Manager().AddMiddleware("fail", b.handleJobFinished(false))
 }
@@ -189,7 +184,6 @@ func (b *BatchSubsystem) newBatch(batchId string, meta *batchMeta) (*batch, erro
 		MetaKey:    fmt.Sprintf("meta-%s", batchId),
 		ParentsKey: fmt.Sprintf("parent-ids-%s", batchId),
 		ChildKey:   fmt.Sprintf("child-ids-%s", batchId),
-		Workers:    make(map[string]string),
 		Jobs:       make([]string, 0),
 		Parents:    make([]*batch, 0),
 		Children:   make([]*batch, 0),

@@ -242,36 +242,6 @@ func TestBatchCannotOpen(t *testing.T) {
 	})
 }
 
-func TestBatchInvalidWorkerOpen(t *testing.T) {
-	batchSystem := new(BatchSubsystem)
-	withServer(batchSystem, true, func(cl *client.Client) {
-		otherClient, err := getClient()
-		if err != nil {
-			panic(err)
-		}
-		b := client.NewBatch(cl)
-
-		b.Success = client.NewJob("batchSuccess", 2, "string", 4)
-
-		err = b.Jobs(func() error {
-			err := b.Push(client.NewJob("JobOne", 1))
-			assert.Nil(t, err)
-			return nil
-		})
-		assert.Nil(t, err)
-		assert.NotEqual(t, "", b.Bid)
-
-		batchData, err := batchSystem.getBatch(b.Bid)
-		assert.True(t, batchData.Meta.Committed)
-
-		// job one
-
-		b, err = otherClient.BatchOpen(b.Bid)
-		assert.Error(t, err)
-		assert.EqualError(t, err, "ERR this worker is not working on a job in the requested batch")
-	})
-}
-
 func TestBatchLoadBatches(t *testing.T) {
 	batchSystem := new(BatchSubsystem)
 	withServer(batchSystem, true, func(cl *client.Client) {

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/contribsys/faktory/client"
-	"reflect"
 	"strings"
 
 	"github.com/contribsys/faktory/server"
@@ -29,17 +28,6 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		_ = c.Error(cmd, errors.New("invalid BATCH command"))
 		return
 	}
-
-	// worker ids are usually only associated with workers
-	// in order for a client to submit a job to a batch it must pass wid to the payload when submitting HELO
-
-	// to retrieve the worker id for this request
-	// we must access client which is a private field of Connection
-	// use reflection in order to get the worker id that is requesting to open the batch
-	connection := reflect.ValueOf(*c)
-	cl := connection.FieldByName("client").Elem()
-
-	wid := cl.FieldByName("Wid").String()
 
 	switch batchOperation := parts[0]; batchOperation {
 	case "NEW":
@@ -83,10 +71,6 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		return
 	case "OPEN":
 		batchId := parts[1]
-		if wid == "" {
-			_ = c.Error(cmd, fmt.Errorf("batches can only be opened from a client with wid set"))
-			return
-		}
 
 		batch, err := b.getBatch(batchId)
 		if err != nil {
@@ -100,10 +84,6 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		}
 
 		if batch.Meta.Committed {
-			if !batch.hasWorker(wid) {
-				_ = c.Error(cmd, fmt.Errorf("this worker is not working on a job in the requested batch"))
-				return
-			}
 			if err := batch.open(); err != nil {
 				_ = c.Error(cmd, fmt.Errorf("cannot open batch: %v", err))
 				return
@@ -140,10 +120,6 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		batchId := subParts[0]
 		childBatchId := subParts[1]
 
-		if wid == "" {
-			_ = c.Error(cmd, fmt.Errorf("child batches can only be added from a client with wid set"))
-			return
-		}
 		batch, err := b.getBatch(batchId)
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot get batch: %v", err))
