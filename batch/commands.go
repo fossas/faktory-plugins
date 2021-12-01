@@ -20,9 +20,8 @@ type NewBatchRequest struct {
 	Description      string      `json:"description,omitempty"`
 	Success          *client.Job `json:"success,omitempty"`
 	Complete         *client.Job `json:"complete,omitempty"`
-	ChildSearchDepth *int         `json:"child_search_depth,omitempty"`
+	ChildSearchDepth *int        `json:"child_search_depth,omitempty"`
 }
-
 
 func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cmd string) {
 	parts := strings.SplitN(cmd, " ", 3)[1:]

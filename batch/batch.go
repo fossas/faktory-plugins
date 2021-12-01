@@ -75,17 +75,17 @@ func (b *batch) init() error {
 	if len(meta) == 0 {
 		// set default values
 		data := map[string]interface{}{
-			"total":              b.Meta.Total,
-			"failed":             b.Meta.Failed,
-			"succeeded":          b.Meta.Succeeded,
-			"pending":            b.Meta.Pending,
-			"created_at":         b.Meta.CreatedAt,
-			"description":        b.Meta.Description,
-			"committed":          b.Meta.Committed,
-			"success_job":        b.Meta.SuccessJob,
-			"complete_job":       b.Meta.CompleteJob,
-			"success_st":         b.Meta.SuccessJobState,
-			"complete_st":        b.Meta.CompleteJobState,
+			"total":        b.Meta.Total,
+			"failed":       b.Meta.Failed,
+			"succeeded":    b.Meta.Succeeded,
+			"pending":      b.Meta.Pending,
+			"created_at":   b.Meta.CreatedAt,
+			"description":  b.Meta.Description,
+			"committed":    b.Meta.Committed,
+			"success_job":  b.Meta.SuccessJob,
+			"complete_job": b.Meta.CompleteJob,
+			"success_st":   b.Meta.SuccessJobState,
+			"complete_st":  b.Meta.CompleteJobState,
 		}
 		if b.Meta.ChildSearchDepth != nil {
 			data["child_search_depth"] = *b.Meta.ChildSearchDepth

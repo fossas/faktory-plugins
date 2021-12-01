@@ -22,10 +22,8 @@ func (b *BatchSubsystem) Fetch(ctx context.Context, wid string, queues ...string
 					return nil, fmt.Errorf("fetch: unable to retrieve batch %s", bid)
 				}
 				batch.setWorkerForJid(job.Jid, wid)
-				util.Infof("Added worker %s for job %s to %s", wid, job.Jid, batch.Id)
 			}
 		}
-
 	}
 	return lease, err
 }
@@ -57,7 +55,6 @@ func (b *BatchSubsystem) fetchMiddleware(next func() error, ctx manager.Context)
 			batch.removeWorkerForJid(ctx.Job().Jid)
 		}
 	}
-
 	return middlewareErr
 }
 
@@ -106,8 +103,6 @@ func (b *BatchSubsystem) handleJobFinished(success bool) func(next func() error,
 				util.Warnf("error processing finished job for batch %v", err)
 				return fmt.Errorf("handleJobFinished: unable to process finished job %s for batch %s", ctx.Job().Jid, batch.Id)
 			}
-
-
 		}
 		return next()
 	}
