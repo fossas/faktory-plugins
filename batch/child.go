@@ -88,21 +88,19 @@ func (b *batch) removeChildren() {
 	}
 }
 
-func (b *batch) handleChildComplete(childBatch *batch, areChildsChildrenFinished bool, visited map[string]bool) {
-	if b.areChildrenFinished(visited) {
-		if areChildsChildrenFinished {
-			// batch can be removed as a parent to stop propagation
-			if err := childBatch.removeParent(b); err != nil {
-				util.Warnf("childCompleted: unable to remove parent (%s) from (%s): %v", b.Id, childBatch.Id, err)
-			}
+func (b *batch) handleChildComplete(childBatch *batch, areChildsChildrenFinished bool, areChildsChildrenSucceeded bool, visited map[string]bool) {
+	if areChildsChildrenFinished && areChildsChildrenSucceeded {
+		// batch can be removed as a parent to stop propagation
+		if err := childBatch.removeParent(b); err != nil {
+			util.Warnf("childCompleted: unable to remove parent (%s) from (%s): %v", b.Id, childBatch.Id, err)
 		}
-		if b.areBatchJobsCompleted() {
-			b.handleBatchJobsCompleted()
-		}
+	}
+	if b.areBatchJobsCompleted() {
+		b.handleBatchJobsCompleted()
 	}
 }
 
-func (b *batch) areChildrenFinished(visited map[string]bool) bool {
+func (b *batch) areChildrenFinished(visited map[string]bool) (bool, bool) {
 	// iterate through children up to a certain depth
 	// check to see if any batch still has jobs being processed
 	currentDepth := 1
@@ -111,6 +109,7 @@ func (b *batch) areChildrenFinished(visited map[string]bool) bool {
 	var childStack []*batch
 	var child *batch
 	var maxSearchDepth int
+	succeeded := true
 	if b.Meta.ChildSearchDepth != nil {
 		maxSearchDepth = *b.Meta.ChildSearchDepth
 	} else {
@@ -123,7 +122,10 @@ func (b *batch) areChildrenFinished(visited map[string]bool) bool {
 		}
 		visited[child.Id] = true
 		if !child.areBatchJobsCompleted() {
-			return false
+			return false, false
+		}
+		if succeeded && !child.areBatchJobsSucceeded() {
+			succeeded = false
 		}
 		if len(child.Children) > 0 {
 			childStack = append(childStack, child.Children...)
@@ -132,12 +134,12 @@ func (b *batch) areChildrenFinished(visited map[string]bool) bool {
 	nextDepth:
 		if len(stack) == 0 && len(childStack) > 0 {
 			if currentDepth == maxSearchDepth {
-				return true
+				return true, succeeded
 			}
 			currentDepth += 1
 			stack = childStack
 			childStack = []*batch{}
 		}
 	}
-	return true
+	return true, succeeded
 }

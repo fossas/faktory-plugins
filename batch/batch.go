@@ -320,24 +320,29 @@ func (b *batch) areBatchJobsCompleted() bool {
 	return b.Meta.Committed == true && b.Meta.Pending == 0
 }
 
+func (b *batch) areBatchJobsSucceeded() bool {
+	return b.Meta.Committed == true && b.Meta.Succeeded == b.Meta.Total
+}
+
 func (b *batch) handleBatchJobsCompleted() {
 	visited := map[string]bool{}
-	areChildrenFinished := b.areChildrenFinished(visited)
+	areChildrenFinished, areChildrenSucceeded := b.areChildrenFinished(visited)
 	if areChildrenFinished {
-		b.handleBatchCompleted()
+		util.Infof("batch: %s children are finished", b.Id)
+		b.handleBatchCompleted(areChildrenSucceeded)
 	}
 	// notify parents child is done
 	for _, parent := range b.Parents {
-		parent.handleChildComplete(b, areChildrenFinished, visited)
+		parent.handleChildComplete(b, areChildrenFinished, areChildrenSucceeded, visited)
 	}
 }
 
-func (b *batch) handleBatchCompleted() {
+func (b *batch) handleBatchCompleted(areChildrenSucceeded bool) {
 	// only create callback jobs if searched children are completed
 	if b.Meta.CompleteJob != "" && b.Meta.CompleteJobState == CallbackJobPending {
 		b.queueBatchDoneJob(b.Meta.CompleteJob, "complete")
 	}
-	if b.Meta.Succeeded == b.Meta.Total && b.Meta.SuccessJob != "" && b.Meta.SuccessJobState == CallbackJobPending {
+	if areChildrenSucceeded && b.Meta.Succeeded == b.Meta.Total && b.Meta.SuccessJob != "" && b.Meta.SuccessJobState == CallbackJobPending {
 		b.queueBatchDoneJob(b.Meta.SuccessJob, "success")
 	}
 	b.removeChildren()
