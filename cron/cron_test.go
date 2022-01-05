@@ -31,6 +31,10 @@ const (
 	    type = "secondly_test_job"
 		retry = 1
 		queue = "test"
+	  [[cron.job.args]]
+        hello = "world"
+      [[cron.job.args]]
+        hello = "human"
 	`
 
 	disabledConfig = `

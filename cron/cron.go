@@ -112,7 +112,6 @@ func (c *CronSubsystem) addCronJobs() error {
 			Subsystem: c,
 			job:       job,
 		})
-
 		if err != nil {
 			util.Warnf("Unable to start cron plugin: %v", err)
 			return fmt.Errorf("createCron: Unable to start cron plugin: %v", err)
@@ -197,7 +196,6 @@ func (c *CronSubsystem) parseCronJob(value map[string]interface{}) (CronJob, err
 
 	// validate jobData is correct
 	err = json.Unmarshal(jobData, &job)
-
 	if err != nil {
 		return cronJob, fmt.Errorf("parseCronJob: unable to unmarshal job: %v", err)
 	}

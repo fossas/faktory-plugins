@@ -1,6 +1,7 @@
 package cron
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -24,14 +25,35 @@ func TestQueueJob(t *testing.T) {
 			assert.Nil(t, err)
 			cronJob := options.CronJobs[0]
 			assert.NotNil(t, cronJob)
-			job := &QueueJob{
+			queueJob := &QueueJob{
 				Subsystem: system,
 				job:       &cronJob,
 			}
-			job.Run()
+			queueJob.Run()
 			queue, err := s.Store().GetQueue("test")
 			assert.Nil(t, err)
 			assert.Equal(t, uint64(1), queue.Size())
+
+			ctx := context.Background()
+			job, err := s.Manager().Fetch(ctx, "", "test")
+			assert.Nil(t, err)
+			assert.Len(t, job.Args, 2)
+			assert.Equal(t, float64(1), job.Args[0])
+			assert.Equal(t, float64(3), job.Args[1])
+
+			cronJob = options.CronJobs[1]
+			assert.NotNil(t, cronJob)
+			queueJob = &QueueJob{
+				Subsystem: system,
+				job:       &cronJob,
+			}
+
+			queueJob.Run()
+			jobTwo, err := s.Manager().Fetch(ctx, "", "test")
+			assert.Nil(t, err)
+			assert.Len(t, jobTwo.Args, 2)
+			assert.Equal(t, map[string]interface{}{"hello": "world"}, jobTwo.Args[0])
+			assert.Equal(t, map[string]interface{}{"hello": "human"}, jobTwo.Args[1])
 		})
 	})
 }
