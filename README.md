@@ -69,6 +69,7 @@ schedule = "*/5 * * * *"
     type = "JobType"
     queue = "queue"
     retry = 3
+    args = [1, 2, 3]
     [cron.job.custom]
       value = true
 [[ cron ]]
@@ -77,6 +78,12 @@ schedule = "3 * * * * * * *" # quartz format
     type = "OtherJob"
     queue = "queue"
     retry = 3
+    [[cron.job.args]]
+      key = "value1"
+      enabled = true
+    [[cron.jobs.args]]
+      key = "value2"
+      enabled = false
     [cron.job.custom]
       value = true
 ```
@@ -119,6 +126,9 @@ You may also schedule a job to execute at fixed intervals, starting at the time 
 
 where "duration" is a string accepted by time.ParseDuration (http://golang.org/pkg/time/#ParseDuration).
 
+Passing job arguments
+
+arguments for jobs can be passed using `args = [1,2,3]` or using `[[cron.job.args]]` and adding key, pair values.
 
 ## License
 
