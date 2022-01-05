@@ -122,7 +122,6 @@ func (c *CronSubsystem) addCronJobs() error {
 
 	// starts cron if not already running
 	c.Cron.Start()
-
 	return nil
 }
 
@@ -152,7 +151,6 @@ func (c *CronSubsystem) getOptions(s *server.Server) (*Options, error) {
 		}
 	}
 	options.CronJobs = cronJobs
-
 	return &options, nil
 }
 

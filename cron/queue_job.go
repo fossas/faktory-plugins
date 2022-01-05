@@ -16,7 +16,7 @@ type QueueJob struct {
 	job       *CronJob
 }
 
-// Runs - creates a new faktory job and enqueues it
+// Run - creates a new faktory job and enqueues it
 func (c *QueueJob) Run() {
 	var job client.Job
 	err := json.Unmarshal(c.job.faktoryJob, &job)

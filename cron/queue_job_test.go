@@ -31,9 +31,7 @@ func TestQueueJob(t *testing.T) {
 			job.Run()
 			queue, err := s.Store().GetQueue("test")
 			assert.Nil(t, err)
-
 			assert.Equal(t, uint64(1), queue.Size())
 		})
-
 	})
 }
