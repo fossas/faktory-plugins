@@ -271,7 +271,7 @@ func TestCron(t *testing.T) {
 }
 
 func runSystem(configDir string, runner func(s *server.Server)) {
-	dir := "/tmp/batching_system.db"
+	dir := "/tmp/cron_system.db"
 	defer os.RemoveAll(dir)
 	opts := &cli.CliOptions{"localhost:7417", "localhost:7420", "development", configDir, "debug", dir}
 	s, stopper, err := cli.BuildServer(opts)
