@@ -265,7 +265,6 @@ func TestCron(t *testing.T) {
 			jobTwo, err := system.Server.Manager().Fetch(nil, "", "default")
 			assert.Nil(t, err)
 			assert.Equal(t, "test_job_2", jobTwo.Type)
-
 		})
 	})
 }

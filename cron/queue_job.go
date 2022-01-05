@@ -32,5 +32,6 @@ func (c *QueueJob) Run() {
 		util.Warnf("Execute: unable to queue job (%s): %v", c.job.Name, err)
 	}
 	util.Infof("Queueing job: %s", c.job.Name)
+
 	return
 }
