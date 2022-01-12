@@ -5,6 +5,7 @@ import (
 
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/util"
+	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
 )
 
@@ -25,7 +26,7 @@ func (c *QueueJob) Run() {
 		return
 	}
 	// assign new job id
-	job.Jid = client.RandomJid()
+	job.Jid = uuid.NewString()
 	job.CreatedAt = util.Nows()
 	// job has already been validated as a proper job on startup
 	if err := c.Subsystem.Server.Manager().Push(&job); err != nil {
