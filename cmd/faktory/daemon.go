@@ -10,6 +10,7 @@ import (
 	"github.com/contribsys/faktory/util"
 	"github.com/contribsys/faktory/webui"
 	"github.com/fossas/faktory-plugins/batch"
+	"github.com/fossas/faktory-plugins/cron"
 	"github.com/fossas/faktory-plugins/metrics"
 	"github.com/fossas/faktory-plugins/uniq"
 )
@@ -48,6 +49,7 @@ func main() {
 	// fossa plugins
 	s.Register(new(uniq.UniqSubsystem))
 	s.Register(new(metrics.MetricsSubsystem))
+	s.Register(new(cron.CronSubsystem))
 	s.Register(new(batch.BatchSubsystem))
 	go cli.HandleSignals(s)
 

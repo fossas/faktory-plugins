@@ -8,6 +8,8 @@ require (
 	github.com/DataDog/datadog-go v4.8.2+incompatible
 	github.com/go-redis/redis v6.15.7+incompatible
 	github.com/golang/mock v1.6.0
+	github.com/google/uuid v1.3.0
+	github.com/robfig/cron/v3 v3.0.0
 	github.com/stretchr/testify v1.7.0
 )
 
