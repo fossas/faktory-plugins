@@ -155,14 +155,19 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			_ = c.Error(cmd, fmt.Errorf("cannot find batch: %v", err))
 			return
 		}
+		childSearchDepth := batch.Meta.ChildSearchDepth
+		if childSearchDepth == nil {
+			childSearchDepth = &b.Options.ChildSearchDepth
+		}
 		data, err := json.Marshal(map[string]interface{}{
-			"bid":          batchId,
-			"total":        batch.Meta.Total,
-			"pending":      batch.Meta.Pending,
-			"description":  batch.Meta.Description,
-			"created_at":   batch.Meta.CreatedAt,
-			"completed_st": CallbackJobPending,
-			"success_st":   CallbackJobPending,
+			"bid":                batchId,
+			"total":              batch.Meta.Total,
+			"pending":            batch.Meta.Pending,
+			"description":        batch.Meta.Description,
+			"created_at":         batch.Meta.CreatedAt,
+			"completed_st":       CallbackJobPending,
+			"success_st":         CallbackJobPending,
+			"child_search_depth": childSearchDepth,
 		})
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("unable to marshal batch data: %v", err))
