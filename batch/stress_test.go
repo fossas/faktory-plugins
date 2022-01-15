@@ -51,21 +51,20 @@ func TestBatchStress(t *testing.T) {
 
 	batches := 10
 	depth := 12
-	jobsPerBatch := 5
-	waitGroups := 5
+	jobsPerBatch := 10
+	waitGroups := 3
 	total := (batches * depth * jobsPerBatch * jobsPerBatch) + batches
 	var wg sync.WaitGroup
 	for i := 0; i < waitGroups; i++ {
 		wg.Add(1)
 		cl, err := getClient()
-		queue := fmt.Sprintf("default-%d", i)
 		assert.Nil(t, err)
-		go func() {
+		go func(queue string) {
 			defer wg.Done()
 			defer cl.Close()
 			createAndProcessBatches(cl, batches, depth, jobsPerBatch, queue)
 			log.Println(fmt.Sprintf("Processed %d total jobs and batches (count=%d, children=%d, depth=%d) in %v", total, batches, jobsPerBatch, depth, time.Since(start)))
-		}()
+		}(fmt.Sprintf("default-%d", i))
 	}
 
 	wg.Wait()
@@ -111,31 +110,37 @@ func runJob(cl *client.Client, jobsPerBatch int, depth int, currentDepth int, qu
 }
 
 func createAndProcessBatches(cl *client.Client, count int, depth int, jobsPerBatch int, queue string) {
-	for i := 0; i < count; i++ {
-		// first batch
-		_, err := createBatch(cl, 1, queue)
-		if err != nil {
-			handleError(err)
-			return
-		}
-		// for each depth, create x jobs
-		for d := 0; d < depth; d++ {
-			for j := 0; j < jobsPerBatch; j++ {
-				if err = processJobForBatch(cl, queue, runJob(cl, jobsPerBatch, depth, d, queue)); err != nil {
-					handleError(err)
-					return
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < count; i++ {
+			// first batch
+			_, err := createBatch(cl, 1, queue)
+			if err != nil {
+				handleError(err)
+				return
+			}
+			// for each depth, create x jobs
+			for d := 0; d < depth; d++ {
+				for j := 0; j < jobsPerBatch; j++ {
+					if err = processJobForBatch(cl, queue, runJob(cl, jobsPerBatch, depth, d, queue)); err != nil {
+						handleError(err)
+						return
+					}
 				}
 			}
 		}
-	}
-	currentCount := count * depth * jobsPerBatch
-	total := (count * depth * jobsPerBatch * jobsPerBatch) - currentCount + count
-	for i := 0; i < total; i++ {
-		if err := processJobForBatch(cl, queue, runJob(cl, jobsPerBatch, depth, depth, queue)); err != nil {
-			handleError(err)
-			return
+		currentCount := count * depth * jobsPerBatch
+		total := (count * depth * jobsPerBatch * jobsPerBatch) - currentCount + count
+		for i := 0; i < total; i++ {
+			if err := processJobForBatch(cl, queue, runJob(cl, jobsPerBatch, depth, depth, queue)); err != nil {
+				handleError(err)
+				return
+			}
 		}
-	}
+	}()
+	wg.Wait()
 }
 
 func createBatch(cl *client.Client, jobsPerBatch int, queue string) (*client.Batch, error) {
