@@ -49,7 +49,7 @@ func TestBatchStress(t *testing.T) {
 
 	start := time.Now()
 
-	batches := 10
+	batches := 5
 	depth := 12
 	jobsPerBatch := 10
 	waitGroups := 3
@@ -110,37 +110,31 @@ func runJob(cl *client.Client, jobsPerBatch int, depth int, currentDepth int, qu
 }
 
 func createAndProcessBatches(cl *client.Client, count int, depth int, jobsPerBatch int, queue string) {
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < count; i++ {
-			// first batch
-			_, err := createBatch(cl, 1, queue)
-			if err != nil {
-				handleError(err)
-				return
-			}
-			// for each depth, create x jobs
-			for d := 0; d < depth; d++ {
-				for j := 0; j < jobsPerBatch; j++ {
-					if err = processJobForBatch(cl, queue, runJob(cl, jobsPerBatch, depth, d, queue)); err != nil {
-						handleError(err)
-						return
-					}
+	for i := 0; i < count; i++ {
+		// first batch
+		_, err := createBatch(cl, 1, queue)
+		if err != nil {
+			handleError(err)
+			return
+		}
+		// for each depth, create x jobs
+		for d := 0; d < depth; d++ {
+			for j := 0; j < jobsPerBatch; j++ {
+				if err = processJobForBatch(cl, queue, runJob(cl, jobsPerBatch, depth, d, queue)); err != nil {
+					handleError(err)
+					return
 				}
 			}
 		}
-		currentCount := count * depth * jobsPerBatch
-		total := (count * depth * jobsPerBatch * jobsPerBatch) - currentCount + count
-		for i := 0; i < total; i++ {
-			if err := processJobForBatch(cl, queue, runJob(cl, jobsPerBatch, depth, depth, queue)); err != nil {
-				handleError(err)
-				return
-			}
+	}
+	currentCount := count * depth * jobsPerBatch
+	total := (count * depth * jobsPerBatch * jobsPerBatch) - currentCount + count
+	for i := 0; i < total; i++ {
+		if err := processJobForBatch(cl, queue, runJob(cl, jobsPerBatch, depth, depth, queue)); err != nil {
+			handleError(err)
+			return
 		}
-	}()
-	wg.Wait()
+	}
 }
 
 func createBatch(cl *client.Client, jobsPerBatch int, queue string) (*client.Batch, error) {
