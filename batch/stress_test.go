@@ -50,91 +50,95 @@ func TestBatchStress(t *testing.T) {
 	start := time.Now()
 
 	batches := 10
-	childBatches := 30
-	jobsPerBatch := 25
-	total := (batches * childBatches * jobsPerBatch) + (batches * jobsPerBatch)
+	depth := 12
+	jobsPerBatch := 10
+	waitGroups := 5
+	total := (batches * depth * jobsPerBatch * jobsPerBatch) + batches
 	var wg sync.WaitGroup
-	for i := 0; i < 3; i++ {
+	for i := 0; i < waitGroups; i++ {
 		wg.Add(1)
 		cl, err := getClient()
+		queue := fmt.Sprintf("default-%d", i)
 		assert.Nil(t, err)
 		go func() {
 			defer wg.Done()
 			defer cl.Close()
-			generateBatchesAndJobs(cl, batches, childBatches, jobsPerBatch)
-			processJobs(cl, batches, childBatches, jobsPerBatch)
-			log.Println(fmt.Sprintf("Processed %d batches with %d childBatches and %d total jobs in %v", batches, childBatches, total, time.Since(start)))
+			createAndProcessBatches(cl, batches, depth, jobsPerBatch, queue)
+			log.Println(fmt.Sprintf("Processed %d total jobs and batches (count=%d, children=%d, depth=%d) in %v", total, batches, jobsPerBatch, depth, time.Since(start)))
 		}()
 	}
 
 	wg.Wait()
-	assert.EqualValues(t, total*3, s.Store().TotalProcessed())
-	q, err := s.Store().GetQueue("default")
-	assert.Nil(t, err)
-	assert.EqualValues(t, 0, int(q.Size()))
+	currentCount := 0
+	assert.EqualValues(t, total*waitGroups, int(s.Store().TotalProcessed()))
+	for i := 0; i < waitGroups; i++ {
+		q, err := s.Store().GetQueue(fmt.Sprintf("default-%d", i))
+		assert.Nil(t, err)
+		currentCount += int(q.Size())
+	}
+
+	assert.EqualValues(t, 0, currentCount)
 	batchQueue, err := s.Store().GetQueue("batch_load")
 	assert.Nil(t, err)
-	assert.EqualValues(t, 2*3*((batches*childBatches)+batches), int(batchQueue.Size()))
+	assert.EqualValues(t, 2*waitGroups*total, int(batchQueue.Size()))
 	s.Stop(nil)
 }
 
-func processJobs(cl *client.Client, count int, depth int, jobsPerBatch int) {
-	for i := 0; i < count; i++ {
-		for job := 0; job < jobsPerBatch; job++ {
-			if err := processJob(cl, true, nil); err != nil {
+func runJob(cl *client.Client, jobsPerBatch int, depth int, currentDepth int, queue string) func(*client.Job) {
+	return func(job *client.Job) {
+		if currentDepth == depth {
+			goto done
+		}
+		for i := 0; i < jobsPerBatch; i++ {
+			childBatch, err := createBatch(cl, 1, queue)
+
+			if err != nil {
 				handleError(err)
+				return
+			}
+
+			if _, err = cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", job.Custom["bid"], childBatch.Bid)); err != nil {
+				handleError(err)
+				return
 			}
 		}
-		for x := 0; x < depth; x++ {
-			for job := 0; job < jobsPerBatch; job++ {
-				if err := processJob(cl, true, nil); err != nil {
+	done:
+		if _, err := cl.Generic(fmt.Sprintf("BATCH COMMIT %s", job.Custom["bid"])); err != nil {
+			handleError(err)
+			return
+		}
+	}
+}
+
+func createAndProcessBatches(cl *client.Client, count int, depth int, jobsPerBatch int, queue string) {
+	for i := 0; i < count; i++ {
+		// first batch
+		_, err := createBatch(cl, 1, queue)
+		if err != nil {
+			handleError(err)
+			return
+		}
+		// for each depth, create x jobs
+		for d := 0; d < depth; d++ {
+			for j := 0; j < jobsPerBatch; j++ {
+				if err = processJobForBatch(cl, queue, runJob(cl, jobsPerBatch, depth, d, queue)); err != nil {
 					handleError(err)
+					return
 				}
 			}
 		}
-
 	}
-}
-
-func generateBatchesAndJobs(cl *client.Client, count int, depth int, jobsPerBatch int) {
-	for i := 0; i < count; i++ {
-		time.Sleep(300 * time.Millisecond)
-
-		parentBatch, err := createBatch(cl, jobsPerBatch)
-		if err != nil {
-			handleError(err)
-			return
-		}
-
-		for currentDepth := 0; currentDepth < depth; currentDepth++ {
-			newBatch, err := createBatch(cl, jobsPerBatch)
-			if err != nil {
-				handleError(err)
-				return
-			}
-
-			_, err = cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", parentBatch.Bid, newBatch.Bid))
-			if err != nil {
-				handleError(err)
-				return
-			}
-			err = parentBatch.Commit()
-			if err != nil {
-				handleError(err)
-				return
-			}
-
-			parentBatch = newBatch
-		}
-		err = parentBatch.Commit()
-		if err != nil {
+	currentCount := count * depth * jobsPerBatch
+	total := (count * depth * jobsPerBatch * jobsPerBatch) - currentCount + count
+	for i := 0; i < total; i++ {
+		if err := processJobForBatch(cl, queue, runJob(cl, jobsPerBatch, depth, depth, queue)); err != nil {
 			handleError(err)
 			return
 		}
 	}
 }
 
-func createBatch(cl *client.Client, jobsPerBatch int) (*client.Batch, error) {
+func createBatch(cl *client.Client, jobsPerBatch int, queue string) (*client.Batch, error) {
 	b := client.NewBatch(cl)
 	successJob := client.NewJob("batchSuccess", 1, "string", 2)
 	successJob.Queue = "batch_load"
@@ -144,7 +148,7 @@ func createBatch(cl *client.Client, jobsPerBatch int) (*client.Batch, error) {
 	b.Complete = completeJob
 	_, err := cl.BatchNew(b)
 	for x := 0; x < jobsPerBatch; x++ {
-		if err := pushJob(b); err != nil {
+		if err := pushJob(b, queue); err != nil {
 			handleError(err)
 		}
 	}
@@ -155,8 +159,10 @@ func createBatch(cl *client.Client, jobsPerBatch int) (*client.Batch, error) {
 	return b, nil
 }
 
-func pushJob(b *client.Batch) error {
-	return b.Push(client.NewJob("SomeJob", 1))
+func pushJob(b *client.Batch, queue string) error {
+	job := client.NewJob("SomeJob", 1)
+	job.Queue = queue
+	return b.Push(job)
 }
 
 func handleError(err error) {
@@ -172,4 +178,23 @@ func stacks() {
 		stacklen := runtime.Stack(buf, true)
 		log.Printf("=== received SIGQUIT ===\n*** goroutine dump...\n%s\n*** end\n", buf[:stacklen])
 	}
+}
+
+func processJobForBatch(cl *client.Client, queue string, runner func(job *client.Job)) error {
+	fetchedJob, err := cl.Fetch(queue)
+	if err != nil {
+		return err
+	}
+
+	if runner != nil {
+		runner(fetchedJob)
+	}
+
+	if fetchedJob == nil {
+		return nil
+	}
+	if err := cl.Ack(fetchedJob.Jid); err != nil {
+		return err
+	}
+	return nil
 }
