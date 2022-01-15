@@ -51,7 +51,7 @@ func TestBatchStress(t *testing.T) {
 
 	batches := 10
 	depth := 12
-	jobsPerBatch := 10
+	jobsPerBatch := 5
 	waitGroups := 5
 	total := (batches * depth * jobsPerBatch * jobsPerBatch) + batches
 	var wg sync.WaitGroup
