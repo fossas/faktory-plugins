@@ -55,7 +55,7 @@ type batchMeta struct {
 func (b *batch) init() error {
 	meta, err := b.rclient.HGetAll(b.MetaKey).Result()
 	if err != nil {
-		return nil
+		return fmt.Errorf("init: unable to retrieve meta: %v", err)
 	}
 
 	if err := b.rclient.SAdd("batches", b.Id).Err(); err != nil {
