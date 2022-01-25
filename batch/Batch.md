@@ -42,7 +42,7 @@ Creates a new uncommitted batch, the following attributes are supported:
 
 Callbacks will have a `_bid` (references batch id) and a `_cb` (either `success` or `complete`) within the `custom` values. The job definition follows the faktory spec. So jobs can be added to queues, have retries, and passed args.
 
-### `BATCH COOMMIT bid`
+### `BATCH COMMIT bid`
 
 Commits a batch so that no new jobs / batches can be added.
 
