@@ -20,7 +20,7 @@ enabled = true # enables the batch plugin
 
 The following values can be also be used:
 
-`child_search_depth` (optional) - the maximum depth used to track children, a value of 0 means infinite depht.
+`child_search_depth` (optional) - the maximum depth used to track children, a value of 0 means infinite depth.
 `uncommitted_timeout_minutes` (optional) - the number of minutes until an uncommitted batch times out. After this adding jobs/children to the batch will cause an error.
 `committed_timeout_days` (optional) - the number of days until a committed batch times out. After this adding children to the batch will cause an error.
 
@@ -49,7 +49,7 @@ Commits a batch so that no new jobs / batches can be added.
 ### `BATCH OPEN bid`
 - returns batch id, if successful
 
-Attempts to open a committed batch, so that new jobs and sub batches can be added. If the batches jobs have been processed then this will return an error.
+Attempts to open a committed batch, so that new jobs and sub batches can be added. If all jobs within the batch have been processed then this will return an error.
 
 ### `BATCH CHILD bid child_bid`
 
