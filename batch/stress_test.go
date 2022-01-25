@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -59,14 +58,13 @@ func TestBatchStress(t *testing.T) {
 		wg.Add(1)
 		cl, err := getClient()
 		assert.Nil(t, err)
-		go func(queue string) {
-			defer wg.Done()
-			defer cl.Close()
+		go func(queue string, cl *client.Client) {
 			createAndProcessBatches(cl, batches, depth, jobsPerBatch, queue)
 			log.Println(fmt.Sprintf("Processed %d total jobs and batches (count=%d, children=%d, depth=%d) in %v", total, batches, jobsPerBatch, depth, time.Since(start)))
-		}(fmt.Sprintf("default-%d", i))
+			cl.Close()
+			wg.Done()
+		}(fmt.Sprintf("default-%d", i), cl)
 	}
-
 	wg.Wait()
 	currentCount := 0
 	assert.EqualValues(t, total*waitGroups, int(s.Store().TotalProcessed()))
@@ -92,46 +90,63 @@ func runJob(cl *client.Client, jobsPerBatch int, depth int, currentDepth int, qu
 			childBatch, err := createBatch(cl, 1, queue)
 
 			if err != nil {
-				handleError(err)
+				fmt.Println(err)
 				return
 			}
 
 			if _, err = cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", job.Custom["bid"], childBatch.Bid)); err != nil {
-				handleError(err)
+				fmt.Println(fmt.Errorf("cannot add child: %v", err))
 				return
 			}
 		}
 	done:
 		if _, err := cl.Generic(fmt.Sprintf("BATCH COMMIT %s", job.Custom["bid"])); err != nil {
-			handleError(err)
+			fmt.Println(fmt.Errorf("cannot commit batch: %v", err))
 			return
 		}
 	}
 }
 
 func createAndProcessBatches(cl *client.Client, count int, depth int, jobsPerBatch int, queue string) {
+	now := time.Now()
 	for i := 0; i < count; i++ {
+		if time.Since(now) > 13*time.Second {
+			now = time.Now()
+			if _, err := cl.Beat(); err != nil {
+				fmt.Println(fmt.Sprintf("error beat: %v", err))
+			}
+		}
 		// first batch
 		_, err := createBatch(cl, 1, queue)
 		if err != nil {
-			handleError(err)
+			fmt.Println(fmt.Errorf("unable to create batch: %v", err))
 			return
 		}
 		// for each depth, create x jobs
 		for d := 0; d < depth; d++ {
 			for j := 0; j < jobsPerBatch; j++ {
 				if err = processJobForBatch(cl, queue, runJob(cl, jobsPerBatch, depth, d, queue)); err != nil {
-					handleError(err)
+					fmt.Println(err)
 					return
 				}
 			}
 		}
 	}
+	if _, err := cl.Beat(); err != nil {
+		fmt.Println(fmt.Sprintf("error beat: %v", err))
+	}
+	now = time.Now()
 	currentCount := count * depth * jobsPerBatch
 	total := (count * depth * jobsPerBatch * jobsPerBatch) - currentCount + count
 	for i := 0; i < total; i++ {
+		if time.Since(now) > 13*time.Second {
+			now = time.Now()
+			if _, err := cl.Beat(); err != nil {
+				fmt.Println(fmt.Sprintf("error beat: %v", err))
+			}
+		}
 		if err := processJobForBatch(cl, queue, runJob(cl, jobsPerBatch, depth, depth, queue)); err != nil {
-			handleError(err)
+			fmt.Println(err)
 			return
 		}
 	}
@@ -145,15 +160,13 @@ func createBatch(cl *client.Client, jobsPerBatch int, queue string) (*client.Bat
 	completeJob := client.NewJob("batchComplete", 2, "string", 3)
 	completeJob.Queue = "batch_load"
 	b.Complete = completeJob
-	_, err := cl.BatchNew(b)
+	if _, err := cl.BatchNew(b); err != nil {
+		return nil, fmt.Errorf("cannot create new batch: %v", err)
+	}
 	for x := 0; x < jobsPerBatch; x++ {
 		if err := pushJob(b, queue); err != nil {
-			handleError(err)
+			fmt.Println(fmt.Errorf("error pushing job %s: %v", b.Bid, err))
 		}
-	}
-
-	if err != nil {
-		return nil, err
 	}
 	return b, nil
 }
@@ -162,10 +175,6 @@ func pushJob(b *client.Batch, queue string) error {
 	job := client.NewJob("SomeJob", 1)
 	job.Queue = queue
 	return b.Push(job)
-}
-
-func handleError(err error) {
-	fmt.Println(strings.Replace(err.Error(), "\n", "", -1))
 }
 
 func stacks() {
@@ -182,7 +191,7 @@ func stacks() {
 func processJobForBatch(cl *client.Client, queue string, runner func(job *client.Job)) error {
 	fetchedJob, err := cl.Fetch(queue)
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to fetch job: %v", err)
 	}
 
 	if runner != nil {
@@ -193,7 +202,7 @@ func processJobForBatch(cl *client.Client, queue string, runner func(job *client
 		return nil
 	}
 	if err := cl.Ack(fetchedJob.Jid); err != nil {
-		return err
+		return fmt.Errorf("unable to ack job: %v", err)
 	}
 	return nil
 }
