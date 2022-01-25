@@ -76,12 +76,16 @@ func (b *BatchSubsystem) getOptions(s *server.Server) *Options {
 
 	uncommittedTimeoutValue := s.Options.Config("batch", "uncommitted_timeout_minutes", 120)
 	uncommittedTimeout, ok := uncommittedTimeoutValue.(int)
+	if !ok {
+		uncommittedTimeout = 120
+	}
 
 	committedTimeoutValue := s.Options.Config("batch", "committed_timeout_days", 7)
 	committedTimeout, ok := committedTimeoutValue.(int)
 	if !ok {
-		uncommittedTimeout = 120
+		committedTimeout = 7
 	}
+
 	return &Options{
 		Enabled:                   enabled,
 		ChildSearchDepth:          childSearchDepth,
