@@ -24,9 +24,10 @@ enabled = true
 func TestUniq(t *testing.T) {
 	opts := cli.ParseArguments()
 	util.InitLogger("info")
+
 	configDir := t.TempDir()
 	os.Mkdir(fmt.Sprintf("%s/conf.d", configDir), os.FileMode(0777))
-	dir := "/tmp/system.db"
+	dir := "/tmp/uniq_system.db"
 	defer os.RemoveAll(dir)
 	opts.ConfigDirectory = configDir
 	opts.StorageDirectory = dir
