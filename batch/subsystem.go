@@ -182,19 +182,21 @@ func (b *BatchSubsystem) newBatch(batchId string, meta *batchMeta) (*batch, erro
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	batch := &batch{
-		Id:         batchId,
-		BatchKey:   fmt.Sprintf("batch-%s", batchId),
-		JobsKey:    fmt.Sprintf("jobs-%s", batchId),
-		MetaKey:    fmt.Sprintf("meta-%s", batchId),
-		ParentsKey: fmt.Sprintf("parent-ids-%s", batchId),
-		ChildKey:   fmt.Sprintf("child-ids-%s", batchId),
-		Jobs:       make([]string, 0),
-		Parents:    make([]*batch, 0),
-		Children:   make([]*batch, 0),
-		Meta:       meta,
-		rclient:    b.Server.Manager().Redis(),
-		mu:         sync.Mutex{},
-		Subsystem:  b,
+		Id:                  batchId,
+		BatchKey:            fmt.Sprintf("batch-%s", batchId),
+		JobsKey:             fmt.Sprintf("jobs-%s", batchId),
+		MetaKey:             fmt.Sprintf("meta-%s", batchId),
+		ParentsKey:          fmt.Sprintf("parent-ids-%s", batchId),
+		ChildKey:            fmt.Sprintf("child-ids-%s", batchId),
+		SuccessJobStateKey:  fmt.Sprintf("success-st-%s", batchId),
+		CompleteJobStateKey: fmt.Sprintf("complete-st-%s", batchId),
+		Jobs:                make([]string, 0),
+		Parents:             make([]*batch, 0),
+		Children:            make([]*batch, 0),
+		Meta:                meta,
+		rclient:             b.Server.Manager().Redis(),
+		mu:                  sync.Mutex{},
+		Subsystem:           b,
 	}
 	if err := batch.init(); err != nil {
 		return nil, fmt.Errorf("newBatch: %v", err)
@@ -224,7 +226,9 @@ func (b *BatchSubsystem) getBatch(batchId string) (*batch, error) {
 		return nil, fmt.Errorf("getBatch: unable to check if batch has timed out")
 	}
 	if exists == 0 {
+		b.mu.Lock()
 		b.removeBatch(batch)
+		b.mu.Unlock()
 		return nil, fmt.Errorf("getBatch: batch was not committed within 2 hours")
 	}
 

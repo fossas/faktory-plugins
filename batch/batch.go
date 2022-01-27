@@ -13,19 +13,21 @@ import (
 )
 
 type batch struct {
-	Id         string
-	BatchKey   string
-	ChildKey   string
-	ParentsKey string
-	JobsKey    string
-	MetaKey    string
-	Meta       *batchMeta
-	Jobs       []string
-	Parents    []*batch
-	Children   []*batch
-	Subsystem  *BatchSubsystem
-	rclient    *redis.Client
-	mu         sync.Mutex
+	Id                  string
+	BatchKey            string
+	ChildKey            string
+	ParentsKey          string
+	JobsKey             string
+	SuccessJobStateKey  string
+	CompleteJobStateKey string
+	MetaKey             string
+	Meta                *batchMeta
+	Jobs                []string
+	Parents             []*batch
+	Children            []*batch
+	Subsystem           *BatchSubsystem
+	rclient             *redis.Client
+	mu                  sync.Mutex
 }
 
 const (
@@ -62,7 +64,8 @@ func (b *batch) init() error {
 		return fmt.Errorf("init: store batch: %v", err)
 	}
 
-	if err := b.rclient.SetNX(b.BatchKey, b.Id, time.Duration(2*time.Hour)).Err(); err != nil {
+	expiration := time.Duration(b.Subsystem.Options.UncommittedTimeoutMinutes) * time.Minute
+	if err := b.rclient.SetNX(b.BatchKey, b.Id, expiration).Err(); err != nil {
 		return fmt.Errorf("init: set expiration: %v", err)
 	}
 	jobs, err := b.rclient.SMembers(b.JobsKey).Result()
@@ -83,14 +86,23 @@ func (b *batch) init() error {
 			"committed":    b.Meta.Committed,
 			"success_job":  b.Meta.SuccessJob,
 			"complete_job": b.Meta.CompleteJob,
-			"success_st":   b.Meta.SuccessJobState,
-			"complete_st":  b.Meta.CompleteJobState,
 		}
 		if b.Meta.ChildSearchDepth != nil {
 			data["child_search_depth"] = *b.Meta.ChildSearchDepth
 		}
 		if err := b.rclient.HMSet(b.MetaKey, data).Err(); err != nil {
 			return fmt.Errorf("init: could not load meta for batch: %s: %v", b.Id, err)
+		}
+		if err := b.rclient.Expire(b.MetaKey, expiration).Err(); err != nil {
+			return fmt.Errorf("init: could set expiration for batch meta: %v", err)
+		}
+
+		timeout := time.Duration(b.Subsystem.Options.CommittedTimeoutDays) * 24 * time.Hour
+		if err := b.rclient.SetNX(b.SuccessJobStateKey, CallbackJobPending, timeout).Err(); err != nil {
+			return fmt.Errorf("updateJobCallbackState: could not set success_st: %v", err)
+		}
+		if err := b.rclient.SetNX(b.CompleteJobStateKey, CallbackJobPending, timeout).Err(); err != nil {
+			return fmt.Errorf("updateJobCallbackState: could not set complete_st: %v", err)
 		}
 		return nil
 	}
@@ -120,8 +132,6 @@ func (b *batch) init() error {
 	b.Meta.CreatedAt = meta["created_at"]
 	b.Meta.SuccessJob = meta["success_job"]
 	b.Meta.CompleteJob = meta["complete_job"]
-	b.Meta.SuccessJobState = meta["success_st"]
-	b.Meta.CompleteJobState = meta["complete_st"]
 	if childSearchDepth, ok := meta["child_search_depth"]; ok {
 		depth, err := strconv.Atoi(childSearchDepth)
 		if err != nil {
@@ -130,6 +140,20 @@ func (b *batch) init() error {
 			b.Meta.ChildSearchDepth = &depth
 		}
 	}
+	successJobState, err := b.rclient.Get(b.SuccessJobStateKey).Result()
+	if err == redis.Nil {
+		successJobState = CallbackJobPending
+	} else if err != nil {
+		return fmt.Errorf("init: get success job state: %v", err)
+	}
+	b.Meta.SuccessJobState = successJobState
+	completeJobState, err := b.rclient.Get(b.CompleteJobStateKey).Result()
+	if err == redis.Nil {
+		completeJobState = CallbackJobPending
+	} else if err != nil {
+		return fmt.Errorf("init: get completed job state: %v", err)
+	}
+	b.Meta.CompleteJobState = completeJobState
 
 	return nil
 }
@@ -179,7 +203,6 @@ func (b *batch) handleCallbackJobSucceeded(callbackType string) error {
 }
 
 func (b *batch) remove() error {
-	b.mu.Lock()
 	if err := b.rclient.SRem("batches", b.Id).Err(); err != nil {
 		return fmt.Errorf("remove: batch (%s) %v", b.Id, err)
 	}
@@ -195,7 +218,6 @@ func (b *batch) remove() error {
 	if err := b.rclient.Del(b.ChildKey).Err(); err != nil {
 		return fmt.Errorf("remove: batch children (%s), %v", b.Id, err)
 	}
-	b.mu.Unlock()
 	return nil
 }
 
@@ -223,14 +245,18 @@ func (b *batch) updateCommitted(committed bool) error {
 func (b *batch) updateJobCallbackState(callbackType string, state string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	timeout := time.Duration(b.Subsystem.Options.CommittedTimeoutDays) * 24 * time.Hour
 	if callbackType == "success" {
 		b.Meta.SuccessJobState = state
-		if err := b.rclient.HSet(b.MetaKey, "success_st", state).Err(); err != nil {
+		if err := b.rclient.SetNX(b.SuccessJobStateKey, state, timeout).Err(); err != nil {
 			return fmt.Errorf("updateJobCallbackState: could not set success_st: %v", err)
+		}
+		if state == CallbackJobSucceeded {
+			b.Subsystem.removeBatch(b)
 		}
 	} else {
 		b.Meta.CompleteJobState = state
-		if err := b.rclient.HSet(b.MetaKey, "completed_st", state).Err(); err != nil {
+		if err := b.rclient.SetNX(b.SuccessJobStateKey, state, timeout).Err(); err != nil {
 			return fmt.Errorf("updateJobCallbackState: could not set completed_st: %v", err)
 		}
 	}
@@ -324,7 +350,9 @@ func (b *batch) handleBatchCompleted(areChildrenSucceeded bool) {
 	if areChildrenSucceeded && b.Meta.Succeeded == b.Meta.Total && b.Meta.SuccessJob != "" && b.Meta.SuccessJobState == CallbackJobPending {
 		b.queueBatchDoneJob(b.Meta.SuccessJob, "success")
 	}
-	b.removeChildren()
+	if areChildrenSucceeded {
+		b.removeChildren()
+	}
 }
 
 func (b *batch) queueBatchDoneJob(jobData string, callbackType string) {
