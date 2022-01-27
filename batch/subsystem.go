@@ -228,9 +228,9 @@ func (b *BatchSubsystem) getBatch(batchId string) (*batch, error) {
 		return nil, fmt.Errorf("getBatch: unable to check if batch has timed out")
 	}
 	if exists == 0 {
-		b.mu.Lock()
+		batch.mu.Lock()
 		b.removeBatch(batch)
-		b.mu.Unlock()
+		batch.mu.Unlock()
 		return nil, fmt.Errorf("getBatch: batch was not committed within 2 hours")
 	}
 
