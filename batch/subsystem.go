@@ -48,6 +48,8 @@ func (b *BatchSubsystem) Start(s *server.Server) error {
 	}
 	server.CommandSet["BATCH"] = b.batchCommand
 	b.addMiddleware()
+
+	b.Server.AddTask(3600, &removeStaleBatches{b})
 	util.Info("Loaded batching plugin")
 	return nil
 }
@@ -242,4 +244,30 @@ func (b *BatchSubsystem) removeBatch(batch *batch) {
 	delete(b.Batches, batch.Id)
 
 	batch = nil
+}
+
+func (b *BatchSubsystem) removeStaleBatches() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, batch := range b.Batches {
+		createdAt, err := time.Parse(time.RFC3339Nano, batch.Meta.CreatedAt)
+		if err != nil {
+			continue
+		}
+		remove := false
+		uncomittedTimeout := time.Now().Add(-time.Duration(b.Options.UncommittedTimeoutMinutes) * time.Minute)
+		comittedTimeout := time.Now().AddDate(0, 0, -b.Options.CommittedTimeoutDays)
+		if !batch.Meta.Committed && createdAt.Before(uncomittedTimeout) {
+			remove = true
+		} else if batch.Meta.Committed && createdAt.Before(comittedTimeout) {
+			remove = true
+		}
+
+		if remove {
+			util.Debugf("Removing stale batch %s", batch.Id)
+			b.mu.Lock()
+			b.removeBatch(batch)
+			b.mu.Unlock()
+		}
+	}
 }
