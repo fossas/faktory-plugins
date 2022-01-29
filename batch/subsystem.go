@@ -186,13 +186,11 @@ func (b *BatchSubsystem) newBatch(batchId string, meta *batchMeta) (*batch, erro
 	batch := &batch{
 		Id:                  batchId,
 		BatchKey:            fmt.Sprintf("batch-%s", batchId),
-		JobsKey:             fmt.Sprintf("jobs-%s", batchId),
 		MetaKey:             fmt.Sprintf("meta-%s", batchId),
 		ParentsKey:          fmt.Sprintf("parent-ids-%s", batchId),
 		ChildKey:            fmt.Sprintf("child-ids-%s", batchId),
 		SuccessJobStateKey:  fmt.Sprintf("success-st-%s", batchId),
 		CompleteJobStateKey: fmt.Sprintf("complete-st-%s", batchId),
-		Jobs:                make([]string, 0),
 		Parents:             make([]*batch, 0),
 		Children:            make([]*batch, 0),
 		Meta:                meta,

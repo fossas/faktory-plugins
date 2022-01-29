@@ -17,12 +17,10 @@ type batch struct {
 	BatchKey            string
 	ChildKey            string
 	ParentsKey          string
-	JobsKey             string
 	SuccessJobStateKey  string
 	CompleteJobStateKey string
 	MetaKey             string
 	Meta                *batchMeta
-	Jobs                []string
 	Parents             []*batch
 	Children            []*batch
 	Subsystem           *BatchSubsystem
@@ -68,11 +66,6 @@ func (b *batch) init() error {
 	if err := b.rclient.SetNX(b.BatchKey, b.Id, expiration).Err(); err != nil {
 		return fmt.Errorf("init: set expiration: %v", err)
 	}
-	jobs, err := b.rclient.SMembers(b.JobsKey).Result()
-	if err != nil {
-		return fmt.Errorf("init: get jobs: %v", err)
-	}
-	b.Jobs = jobs
 
 	if len(meta) == 0 {
 		// set default values
@@ -209,9 +202,6 @@ func (b *batch) remove() error {
 	if err := b.rclient.Del(b.MetaKey).Err(); err != nil {
 		return fmt.Errorf("remove: batch meta (%s) %v", b.Id, err)
 	}
-	if err := b.rclient.Del(b.JobsKey).Err(); err != nil {
-		return fmt.Errorf("remove: batch jobs (%s), %v", b.Id, err)
-	}
 	if err := b.rclient.Del(b.ParentsKey).Err(); err != nil {
 		return fmt.Errorf("remove: batch parents (%s), %v", b.Id, err)
 	}
@@ -266,9 +256,6 @@ func (b *batch) updateJobCallbackState(callbackType string, state string) error 
 func (b *batch) addJobToBatch(jobId string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if err := b.rclient.SAdd(b.JobsKey, jobId).Err(); err != nil {
-		return fmt.Errorf("addJobToBatch: %v", err)
-	}
 	b.Meta.Total += 1
 	if err := b.rclient.HIncrBy(b.MetaKey, "total", 1).Err(); err != nil {
 		return fmt.Errorf("addJobToBatch: unable to modify total: %v", err)
@@ -277,13 +264,6 @@ func (b *batch) addJobToBatch(jobId string) error {
 	if err := b.rclient.HIncrBy(b.MetaKey, "pending", 1).Err(); err != nil {
 		return fmt.Errorf("addJobToBatch: unable to modify pending: %v", err)
 	}
-	b.Jobs = append(b.Jobs, jobId)
-	if len(b.Jobs) == 1 {
-		// only set expire when adding the first job
-		if err := b.rclient.Expire(b.JobsKey, time.Duration(b.Subsystem.Options.CommittedTimeoutDays)*time.Hour*24).Err(); err != nil {
-			util.Warnf("addChild: could not set expiration for set storing batch children: %v", err)
-		}
-	}
 	return nil
 }
 
@@ -291,16 +271,6 @@ func (b *batch) removeJobFromBatch(jobId string, success bool, isRetry bool) err
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !isRetry {
-		// job has already been removed
-		if err := b.rclient.SRem(b.JobsKey, jobId).Err(); err != nil {
-			return fmt.Errorf("removeJobFromBatch: could not remove job key %v", err)
-		}
-		for i, v := range b.Jobs {
-			if v == jobId {
-				b.Jobs = append(b.Jobs[:i], b.Jobs[i+1:]...)
-				break
-			}
-		}
 		b.Meta.Pending -= 1
 		if err := b.rclient.HIncrBy(b.MetaKey, "pending", -1).Err(); err != nil {
 			return fmt.Errorf("removeJobFromBatch: unable to modify pending: %v", err)
