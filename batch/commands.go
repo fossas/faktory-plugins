@@ -59,8 +59,8 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			complete = string(completeData)
 		}
 
-		meta := b.newBatchMeta(batchRequest.Description, success, complete, batchRequest.ChildSearchDepth)
-		batch, err := b.newBatch(batchId, meta)
+		meta := b.batchManager.newBatchMeta(batchRequest.Description, success, complete, batchRequest.ChildSearchDepth)
+		batch, err := b.batchManager.newBatch(batchId, meta)
 
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("unable to create batch: %v", err))
@@ -72,19 +72,19 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 	case "OPEN":
 		batchId := parts[1]
 
-		batch, err := b.getBatch(batchId)
+		batch, err := b.batchManager.getBatch(batchId)
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot get batch: %v", err))
 			return
 		}
 
-		if batch.areBatchJobsCompleted() {
+		if b.batchManager.areBatchJobsCompleted(batch) {
 			_ = c.Error(cmd, errors.New("batch has already finished"))
 			return
 		}
 
 		if batch.Meta.Committed {
-			if err := batch.open(); err != nil {
+			if err := b.batchManager.open(batch); err != nil {
 				_ = c.Error(cmd, fmt.Errorf("cannot open batch: %v", err))
 				return
 			}
@@ -98,13 +98,13 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			_ = c.Error(cmd, errors.New("bid is required"))
 			return
 		}
-		batch, err := b.getBatch(batchId)
+		batch, err := b.batchManager.getBatch(batchId)
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot get batch: %v", err))
 			return
 		}
 
-		if err := batch.commit(); err != nil {
+		if err := b.batchManager.commit(batch); err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot commit batch: %v", err))
 			return
 		}
@@ -120,7 +120,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		batchId := subParts[0]
 		childBatchId := subParts[1]
 
-		batch, err := b.getBatch(batchId)
+		batch, err := b.batchManager.getBatch(batchId)
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot get batch: %v", err))
 			return
@@ -131,18 +131,18 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			return
 		}
 
-		if batch.areBatchJobsCompleted() {
+		if b.batchManager.areBatchJobsCompleted(batch) {
 			_ = c.Error(cmd, errors.New("batch has already finished"))
 			return
 		}
 
-		childBatch, err := b.getBatch(childBatchId)
+		childBatch, err := b.batchManager.getBatch(childBatchId)
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot get child batch: %v", err))
 			return
 		}
 
-		if err := batch.addChild(childBatch); err != nil {
+		if err := b.batchManager.addChild(batch, childBatch); err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot add child (%s) to batch (%s): %v", childBatchId, batchId, err))
 		}
 
@@ -150,7 +150,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		return
 	case "STATUS":
 		batchId := parts[1]
-		batch, err := b.getBatch(batchId)
+		batch, err := b.batchManager.getBatch(batchId)
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot find batch: %v", err))
 			return

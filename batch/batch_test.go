@@ -33,7 +33,7 @@ func TestBatchSuccess(t *testing.T) {
 		assert.NotEqual(t, "", b.Bid)
 
 		time.Sleep(1 * time.Second)
-		batchData, err := batchSystem.getBatch(b.Bid)
+		batchData, err := batchSystem.batchManager.getBatch(b.Bid)
 		assert.Nil(t, err)
 		assert.Equal(t, 2, batchData.Meta.Total)
 
@@ -43,7 +43,7 @@ func TestBatchSuccess(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		assert.Equal(t, 1, batchData.Meta.Succeeded)
-		assert.False(t, batchData.areBatchJobsCompleted())
+		assert.False(t, batchSystem.batchManager.areBatchJobsCompleted(batchData))
 
 		// job two
 		err = processJob(cl, true, func(job *client.Job) {
@@ -54,7 +54,7 @@ func TestBatchSuccess(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, 2, batchData.Meta.Succeeded)
 		assert.Equal(t, 0, batchData.Meta.Failed)
-		assert.True(t, batchData.areBatchJobsCompleted())
+		assert.True(t, batchSystem.batchManager.areBatchJobsCompleted(batchData))
 
 		assert.Equal(t, "1", batchData.Meta.CompleteJobState)
 		assert.Equal(t, "1", batchData.Meta.SuccessJobState)
@@ -96,7 +96,7 @@ func TestBatchCompleteAndEventualSuccess(t *testing.T) {
 		assert.Nil(t, err)
 		assert.NotEqual(t, "", b.Bid)
 
-		batchData, err := batchSystem.getBatch(b.Bid)
+		batchData, err := batchSystem.batchManager.getBatch(b.Bid)
 		assert.Nil(t, err)
 		assert.Equal(t, 2, batchData.Meta.Total)
 		assert.Equal(t, 2, batchData.Meta.Pending)
@@ -107,7 +107,7 @@ func TestBatchCompleteAndEventualSuccess(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		assert.Equal(t, 1, batchData.Meta.Succeeded)
-		assert.False(t, batchData.areBatchJobsCompleted())
+		assert.False(t, batchSystem.batchManager.areBatchJobsCompleted(batchData))
 		assert.Equal(t, 1, batchData.Meta.Pending)
 
 		// job two
@@ -120,7 +120,7 @@ func TestBatchCompleteAndEventualSuccess(t *testing.T) {
 		assert.Equal(t, 1, batchData.Meta.Succeeded)
 		assert.Equal(t, 1, batchData.Meta.Failed)
 		assert.Equal(t, 0, batchData.Meta.Pending)
-		assert.True(t, batchData.areBatchJobsCompleted())
+		assert.True(t, batchSystem.batchManager.areBatchJobsCompleted(batchData))
 
 		// done job
 		err = processJob(cl, true, func(job *client.Job) {
@@ -178,7 +178,7 @@ func TestBatchReopen(t *testing.T) {
 		assert.Nil(t, err)
 		assert.NotEqual(t, "", b.Bid)
 
-		batchData, err := batchSystem.getBatch(b.Bid)
+		batchData, err := batchSystem.batchManager.getBatch(b.Bid)
 		assert.True(t, batchData.Meta.Committed)
 
 		// job one
@@ -201,7 +201,7 @@ func TestBatchReopen(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		assert.Equal(t, 2, batchData.Meta.Succeeded)
-		assert.False(t, batchData.areBatchJobsCompleted())
+		assert.False(t, batchSystem.batchManager.areBatchJobsCompleted(batchData))
 
 		// job three
 		err = processJob(cl, true, func(job *client.Job) {
@@ -209,7 +209,7 @@ func TestBatchReopen(t *testing.T) {
 			assert.Equal(t, 0, batchData.Meta.Failed)
 		})
 		assert.Nil(t, err)
-		assert.True(t, batchData.areBatchJobsCompleted())
+		assert.True(t, batchSystem.batchManager.areBatchJobsCompleted(batchData))
 	})
 }
 
@@ -228,7 +228,7 @@ func TestBatchCannotOpen(t *testing.T) {
 		assert.Nil(t, err)
 		assert.NotEqual(t, "", b.Bid)
 
-		batchData, err := batchSystem.getBatch(b.Bid)
+		batchData, err := batchSystem.batchManager.getBatch(b.Bid)
 		assert.True(t, batchData.Meta.Committed)
 
 		// job one
@@ -267,12 +267,12 @@ func TestBatchLoadBatches(t *testing.T) {
 
 		processJob(cl, true, nil)
 		processJob(cl, false, nil)
-		batchSystem.Batches = make(map[string]*batch)
-		_, err = batchSystem.getBatch(b.Bid)
+		batchSystem.batchManager.Batches = make(map[string]*batch)
+		_, err = batchSystem.batchManager.getBatch(b.Bid)
 		assert.EqualError(t, err, "getBatch: no batch found")
-		err = batchSystem.loadExistingBatches()
+		err = batchSystem.batchManager.loadExistingBatches()
 		assert.Nil(t, err)
-		batchData, err := batchSystem.getBatch(b.Bid)
+		batchData, err := batchSystem.batchManager.getBatch(b.Bid)
 		assert.Nil(t, err)
 		assert.Equal(t, 4, batchData.Meta.Total)
 		assert.Equal(t, 1, batchData.Meta.Failed)
