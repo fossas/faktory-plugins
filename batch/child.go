@@ -79,8 +79,7 @@ func (m *batchManager) removeParent(batch *batch, parentBatch *batch) error {
 }
 
 func (m *batchManager) removeChildren(b *batch) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	// locking must be handled outside of function
 	if len(b.Children) > 0 {
 		b.Children = []*batch{}
 		if err := m.rclient.Del(m.getChildKey(b.Id)).Err(); err != nil {

@@ -67,7 +67,7 @@ func TestBatchStress(t *testing.T) {
 	}
 	wg.Wait()
 	currentCount := 0
-	assert.EqualValues(t, total*waitGroups, int(s.Store().TotalProcessed()))
+	assert.EqualValues(t, 2*total*waitGroups, int(s.Store().TotalProcessed()))
 	for i := 0; i < waitGroups; i++ {
 		q, err := s.Store().GetQueue(fmt.Sprintf("default-%d", i))
 		assert.Nil(t, err)
@@ -75,9 +75,9 @@ func TestBatchStress(t *testing.T) {
 	}
 
 	assert.EqualValues(t, 0, currentCount)
-	batchQueue, err := s.Store().GetQueue("batch_load")
+	batchQueue, err := s.Store().GetQueue("batch_load_complete")
 	assert.Nil(t, err)
-	assert.EqualValues(t, 2*waitGroups*total, int(batchQueue.Size()))
+	assert.EqualValues(t, waitGroups*total, int(batchQueue.Size()))
 	s.Stop(nil)
 }
 
@@ -150,6 +150,18 @@ func createAndProcessBatches(cl *client.Client, count int, depth int, jobsPerBat
 			return
 		}
 	}
+	for i := 0; i < total+currentCount; i++ {
+		if time.Since(now) > 13*time.Second {
+			now = time.Now()
+			if _, err := cl.Beat(); err != nil {
+				fmt.Println(fmt.Sprintf("error beat: %v", err))
+			}
+		}
+		if err := processJobForBatch(cl, "batch_load", nil); err != nil {
+			fmt.Println(err)
+			return
+		}
+	}
 }
 
 func createBatch(cl *client.Client, jobsPerBatch int, queue string) (*client.Batch, error) {
@@ -158,7 +170,7 @@ func createBatch(cl *client.Client, jobsPerBatch int, queue string) (*client.Bat
 	successJob.Queue = "batch_load"
 	b.Success = successJob
 	completeJob := client.NewJob("batchComplete", 2, "string", 3)
-	completeJob.Queue = "batch_load"
+	completeJob.Queue = "batch_load_complete"
 	b.Complete = completeJob
 	if _, err := cl.BatchNew(b); err != nil {
 		return nil, fmt.Errorf("cannot create new batch: %v", err)

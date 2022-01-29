@@ -121,13 +121,14 @@ func (m *batchManager) getBatch(batchId string) (*batch, error) {
 }
 
 func (m *batchManager) removeBatch(batch *batch) {
-	fmt.Println("deleting batch")
+	m.mu.Lock()
 	if err := m.remove(batch); err != nil {
 		util.Warnf("removeBatch: unable to remove batch: %v", err)
 	}
 	delete(m.Batches, batch.Id)
 
 	batch = nil
+	m.mu.Unlock()
 }
 
 func (m *batchManager) removeStaleBatches() {
@@ -255,10 +256,10 @@ func (m *batchManager) init(batch *batch) error {
 
 		timeout := time.Duration(m.Subsystem.Options.CommittedTimeoutDays) * 24 * time.Hour
 		if err := m.rclient.SetNX(m.getSuccessJobStateKey(batch.Id), CallbackJobPending, timeout).Err(); err != nil {
-			return fmt.Errorf("updateJobCallbackState: could not set success_st: %v", err)
+			return fmt.Errorf("init: could not set success_st: %v", err)
 		}
 		if err := m.rclient.SetNX(m.getCompleteJobStateKey(batch.Id), CallbackJobPending, timeout).Err(); err != nil {
-			return fmt.Errorf("updateJobCallbackState: could not set complete_st: %v", err)
+			return fmt.Errorf("init: could not set complete_st: %v", err)
 		}
 		return nil
 	}
@@ -352,6 +353,8 @@ func (m *batchManager) handleJobFinished(batch *batch, jobId string, success boo
 }
 
 func (m *batchManager) handleCallbackJobSucceeded(batch *batch, callbackType string) error {
+	batch.mu.Lock()
+	defer batch.mu.Unlock()
 	if err := m.updateJobCallbackState(batch, callbackType, CallbackJobSucceeded); err != nil {
 		return fmt.Errorf("callbackJobSucceeded: update callback job state: %v", err)
 	}
@@ -396,8 +399,7 @@ func (m *batchManager) updateCommitted(batch *batch, committed bool) error {
 }
 
 func (m *batchManager) updateJobCallbackState(batch *batch, callbackType string, state string) error {
-	batch.mu.Lock()
-	defer batch.mu.Unlock()
+	// locking must be handled outside of call
 	timeout := time.Duration(m.Subsystem.Options.CommittedTimeoutDays) * 24 * time.Hour
 	if callbackType == "success" {
 		batch.Meta.SuccessJobState = state
@@ -476,6 +478,8 @@ func (m *batchManager) handleBatchJobsCompleted(batch *batch) {
 }
 
 func (m *batchManager) handleBatchCompleted(batch *batch, areChildrenSucceeded bool) {
+	batch.mu.Lock()
+	defer batch.mu.Unlock()
 	// only create callback jobs if searched children are completed
 	if batch.Meta.CompleteJob != "" && batch.Meta.CompleteJobState == CallbackJobPending {
 		m.queueBatchDoneJob(batch, batch.Meta.CompleteJob, "complete")
