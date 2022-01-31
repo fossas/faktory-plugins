@@ -2,6 +2,7 @@ package batch
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -13,29 +14,12 @@ import (
 )
 
 type batch struct {
-	Id         string
-	BatchKey   string
-	ChildKey   string
-	ParentsKey string
-	JobsKey    string
-	MetaKey    string
-	Meta       *batchMeta
-	Jobs       []string
-	Parents    []*batch
-	Children   []*batch
-	Subsystem  *BatchSubsystem
-	rclient    *redis.Client
-	mu         sync.Mutex
+	Id       string
+	Meta     *batchMeta
+	Parents  []*batch
+	Children []*batch
+	mu       sync.Mutex
 }
-
-const (
-	// CallbackJobPending no status
-	CallbackJobPending = ""
-	// CallbackJobQueued callback job has been queued
-	CallbackJobQueued = "1"
-	// CallbackJobSucceeded callback job has succeeded
-	CallbackJobSucceeded = "2"
-)
 
 type batchMeta struct {
 	Total            int
@@ -52,298 +36,502 @@ type batchMeta struct {
 	ChildSearchDepth *int
 }
 
-func (b *batch) init() error {
-	meta, err := b.rclient.HGetAll(b.MetaKey).Result()
+type batchManager struct {
+	Batches   map[string]*batch
+	Subsystem *BatchSubsystem
+	rclient   *redis.Client
+	mu        sync.Mutex
+}
+
+const (
+	// CallbackJobPending no status
+	CallbackJobPending = ""
+	// CallbackJobQueued callback job has been queued
+	CallbackJobQueued = "1"
+	// CallbackJobSucceeded callback job has succeeded
+	CallbackJobSucceeded = "2"
+)
+
+func (m *batchManager) getBatchFromInterface(batchId interface{}) (*batch, error) {
+	bid, ok := batchId.(string)
+	if !ok {
+		return nil, errors.New("getBatchFromInterface: invalid custom bid value")
+	}
+	batch, err := m.getBatch(bid)
+	if err != nil {
+		util.Warnf("getBatchFromInterface: Unable to retrieve batch: %v", err)
+		return nil, fmt.Errorf("getBatchFromInterface: unable to get batch: %s", bid)
+	}
+	return batch, nil
+}
+
+func (m *batchManager) loadExistingBatches() error {
+	vals, err := m.rclient.SMembers("batches").Result()
+	if err != nil {
+		return fmt.Errorf("loadExistingBatches: retrieve batches: %v", err)
+	}
+	for idx := range vals {
+		batch, err := m.newBatch(vals[idx], &batchMeta{})
+		if err != nil {
+			util.Warnf("loadExistingBatches: error load batch (%s) %v", vals[idx], err)
+			continue
+		}
+		m.Batches[vals[idx]] = batch
+	}
+
+	// update parent and children
+	for _, b := range m.Batches {
+		parentIds, err := m.rclient.SMembers(m.getParentsKey(b.Id)).Result()
+		if err != nil {
+			return fmt.Errorf("init: get parents: %v", err)
+		}
+		for _, parentId := range parentIds {
+			parentBatch, err := m.getBatch(parentId)
+			if err != nil {
+				util.Warnf("loadExistingBatches: error getting parent batch (%s) %v", parentId, err)
+				continue
+			}
+			b.Parents = append(b.Parents, parentBatch)
+		}
+
+		childIds, err := m.rclient.SMembers(m.getChildKey(b.Id)).Result()
+		if err != nil {
+			return fmt.Errorf("init: get parents: %v", err)
+		}
+		for _, childId := range childIds {
+			childBatch, err := m.getBatch(childId)
+			if err != nil {
+				util.Warnf("loadExistingBatches: error getting child batch (%s) %v", childId, err)
+				continue
+			}
+			b.Children = append(b.Children, childBatch)
+		}
+
+		if m.areBatchJobsCompleted(b) {
+			m.handleBatchJobsCompleted(b)
+		}
+	}
+
+	return nil
+}
+
+func (m *batchManager) getBatch(batchId string) (*batch, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if batchId == "" {
+		return nil, fmt.Errorf("getBatch: batchId cannot be blank")
+	}
+
+	b, ok := m.Batches[batchId]
+
+	if !ok {
+		return nil, fmt.Errorf("getBatch: no batch found")
+	}
+
+	exists, err := m.rclient.Exists(m.getBatchKey(b.Id)).Result()
+	if err != nil {
+		util.Warnf("Cannot confirm batch exists: %v", err)
+		return nil, fmt.Errorf("getBatch: unable to check if batch has timed out")
+	}
+	if exists == 0 {
+		b.mu.Lock()
+		m.removeBatch(b)
+		b.mu.Unlock()
+		return nil, fmt.Errorf("getBatch: batch was not committed within 2 hours")
+	}
+
+	return b, nil
+}
+
+func (m *batchManager) removeBatch(batch *batch) {
+	m.mu.Lock()
+	if err := m.remove(batch); err != nil {
+		util.Warnf("removeBatch: unable to remove batch: %v", err)
+	}
+	delete(m.Batches, batch.Id)
+
+	batch = nil
+	m.mu.Unlock()
+}
+
+func (m *batchManager) removeStaleBatches() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, b := range m.Batches {
+		createdAt, err := time.Parse(time.RFC3339Nano, b.Meta.CreatedAt)
+		if err != nil {
+			continue
+		}
+		remove := false
+		uncomittedTimeout := time.Now().Add(-time.Duration(m.Subsystem.Options.UncommittedTimeoutMinutes) * time.Minute)
+		comittedTimeout := time.Now().AddDate(0, 0, -m.Subsystem.Options.CommittedTimeoutDays)
+		if !b.Meta.Committed && createdAt.Before(uncomittedTimeout) {
+			remove = true
+		} else if b.Meta.Committed && createdAt.Before(comittedTimeout) {
+			remove = true
+		}
+
+		if remove {
+			util.Debugf("Removing stale batch %s", b.Id)
+			b.mu.Lock()
+			m.removeBatch(b)
+			b.mu.Unlock()
+		}
+	}
+}
+
+func (m *batchManager) newBatchMeta(description string, success string, complete string, childSearchDepth *int) *batchMeta {
+	return &batchMeta{
+		CreatedAt:        time.Now().UTC().Format(time.RFC3339Nano),
+		Total:            0,
+		Succeeded:        0,
+		Failed:           0,
+		Pending:          0,
+		SuccessJob:       success,
+		CompleteJob:      complete,
+		Description:      description,
+		SuccessJobState:  CallbackJobPending,
+		CompleteJobState: CallbackJobPending,
+		ChildSearchDepth: childSearchDepth,
+	}
+}
+
+func (m *batchManager) newBatch(batchId string, meta *batchMeta) (*batch, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b := &batch{
+		Id:       batchId,
+		Parents:  make([]*batch, 0),
+		Children: make([]*batch, 0),
+		Meta:     meta,
+		mu:       sync.Mutex{},
+	}
+	if err := m.init(b); err != nil {
+		return nil, fmt.Errorf("newBatch: %v", err)
+	}
+
+	m.Batches[batchId] = b
+
+	return b, nil
+}
+
+func (m *batchManager) getBatchKey(batchId string) string {
+	return fmt.Sprintf("batch-%s", batchId)
+}
+
+func (m *batchManager) getMetaKey(batchId string) string {
+	return fmt.Sprintf("meta-%s", batchId)
+}
+
+func (m *batchManager) getParentsKey(batchId string) string {
+	return fmt.Sprintf("parent-ids-%s", batchId)
+}
+
+func (m *batchManager) getChildKey(batchId string) string {
+	return fmt.Sprintf("child-ids--%s", batchId)
+}
+
+func (m *batchManager) getSuccessJobStateKey(batchId string) string {
+	return fmt.Sprintf("success-st-%s", batchId)
+}
+
+func (m *batchManager) getCompleteJobStateKey(batchId string) string {
+	return fmt.Sprintf("complete-st-%s", batchId)
+}
+
+func (m *batchManager) init(batch *batch) error {
+	meta, err := m.rclient.HGetAll(m.getMetaKey(batch.Id)).Result()
 	if err != nil {
 		return fmt.Errorf("init: unable to retrieve meta: %v", err)
 	}
 
-	if err := b.rclient.SAdd("batches", b.Id).Err(); err != nil {
+	if err := m.rclient.SAdd("batches", batch.Id).Err(); err != nil {
 		return fmt.Errorf("init: store batch: %v", err)
 	}
 
-	if err := b.rclient.SetNX(b.BatchKey, b.Id, time.Duration(2*time.Hour)).Err(); err != nil {
+	expiration := time.Duration(m.Subsystem.Options.UncommittedTimeoutMinutes) * time.Minute
+	if err := m.rclient.SetNX(m.getBatchKey(batch.Id), batch.Id, expiration).Err(); err != nil {
 		return fmt.Errorf("init: set expiration: %v", err)
 	}
-	jobs, err := b.rclient.SMembers(b.JobsKey).Result()
-	if err != nil {
-		return fmt.Errorf("init: get jobs: %v", err)
-	}
-	b.Jobs = jobs
 
 	if len(meta) == 0 {
 		// set default values
 		data := map[string]interface{}{
-			"total":        b.Meta.Total,
-			"failed":       b.Meta.Failed,
-			"succeeded":    b.Meta.Succeeded,
-			"pending":      b.Meta.Pending,
-			"created_at":   b.Meta.CreatedAt,
-			"description":  b.Meta.Description,
-			"committed":    b.Meta.Committed,
-			"success_job":  b.Meta.SuccessJob,
-			"complete_job": b.Meta.CompleteJob,
-			"success_st":   b.Meta.SuccessJobState,
-			"complete_st":  b.Meta.CompleteJobState,
+			"total":        batch.Meta.Total,
+			"failed":       batch.Meta.Failed,
+			"succeeded":    batch.Meta.Succeeded,
+			"pending":      batch.Meta.Pending,
+			"created_at":   batch.Meta.CreatedAt,
+			"description":  batch.Meta.Description,
+			"committed":    batch.Meta.Committed,
+			"success_job":  batch.Meta.SuccessJob,
+			"complete_job": batch.Meta.CompleteJob,
 		}
-		if b.Meta.ChildSearchDepth != nil {
-			data["child_search_depth"] = *b.Meta.ChildSearchDepth
+		if batch.Meta.ChildSearchDepth != nil {
+			data["child_search_depth"] = *batch.Meta.ChildSearchDepth
 		}
-		if err := b.rclient.HMSet(b.MetaKey, data).Err(); err != nil {
-			return fmt.Errorf("init: could not load meta for batch: %s: %v", b.Id, err)
+		if err := m.rclient.HMSet(m.getMetaKey(batch.Id), data).Err(); err != nil {
+			return fmt.Errorf("init: could not load meta for batch: %s: %v", batch.Id, err)
+		}
+		if err := m.rclient.Expire(m.getMetaKey(batch.Id), expiration).Err(); err != nil {
+			return fmt.Errorf("init: could set expiration for batch meta: %v", err)
+		}
+
+		timeout := time.Duration(m.Subsystem.Options.CommittedTimeoutDays) * 24 * time.Hour
+		if err := m.rclient.SetNX(m.getSuccessJobStateKey(batch.Id), CallbackJobPending, timeout).Err(); err != nil {
+			return fmt.Errorf("init: could not set success_st: %v", err)
+		}
+		if err := m.rclient.SetNX(m.getCompleteJobStateKey(batch.Id), CallbackJobPending, timeout).Err(); err != nil {
+			return fmt.Errorf("init: could not set complete_st: %v", err)
 		}
 		return nil
 	}
 
-	b.Meta.Total, err = strconv.Atoi(meta["total"])
+	batch.Meta.Total, err = strconv.Atoi(meta["total"])
 	if err != nil {
 		return fmt.Errorf("init: total: failed converting string to int: %v", err)
 	}
-	b.Meta.Failed, err = strconv.Atoi(meta["failed"])
+	batch.Meta.Failed, err = strconv.Atoi(meta["failed"])
 	if err != nil {
 		return fmt.Errorf("init: failed: failed converting string to int: %v", err)
 	}
-	b.Meta.Succeeded, err = strconv.Atoi(meta["succeeded"])
+	batch.Meta.Succeeded, err = strconv.Atoi(meta["succeeded"])
 	if err != nil {
 		return fmt.Errorf("init: succeeded: failed converting string to int: %v", err)
 	}
-	b.Meta.Pending, err = strconv.Atoi(meta["pending"])
+	batch.Meta.Pending, err = strconv.Atoi(meta["pending"])
 	if err != nil {
 		return fmt.Errorf("init: pending: failed converting string to int: %v", err)
 	}
 
-	b.Meta.Committed, err = strconv.ParseBool(meta["committed"])
+	batch.Meta.Committed, err = strconv.ParseBool(meta["committed"])
 	if err != nil {
 		return fmt.Errorf("init: committed: failed converting string to bool: %v", err)
 	}
-	b.Meta.Description = meta["description"]
-	b.Meta.CreatedAt = meta["created_at"]
-	b.Meta.SuccessJob = meta["success_job"]
-	b.Meta.CompleteJob = meta["complete_job"]
-	b.Meta.SuccessJobState = meta["success_st"]
-	b.Meta.CompleteJobState = meta["complete_st"]
+	batch.Meta.Description = meta["description"]
+	batch.Meta.CreatedAt = meta["created_at"]
+	batch.Meta.SuccessJob = meta["success_job"]
+	batch.Meta.CompleteJob = meta["complete_job"]
 	if childSearchDepth, ok := meta["child_search_depth"]; ok {
 		depth, err := strconv.Atoi(childSearchDepth)
 		if err != nil {
-			util.Warnf("Unable to set childSearchDepth for batch: %s", b.Id)
+			util.Warnf("Unable to set childSearchDepth for batch: %s", batch.Id)
 		} else {
-			b.Meta.ChildSearchDepth = &depth
+			batch.Meta.ChildSearchDepth = &depth
 		}
 	}
+	successJobState, err := m.rclient.Get(m.getSuccessJobStateKey(batch.Id)).Result()
+	if err == redis.Nil {
+		successJobState = CallbackJobPending
+	} else if err != nil {
+		return fmt.Errorf("init: get success job state: %v", err)
+	}
+	batch.Meta.SuccessJobState = successJobState
+	completeJobState, err := m.rclient.Get(m.getCompleteJobStateKey(batch.Id)).Result()
+	if err == redis.Nil {
+		completeJobState = CallbackJobPending
+	} else if err != nil {
+		return fmt.Errorf("init: get completed job state: %v", err)
+	}
+	batch.Meta.CompleteJobState = completeJobState
 
 	return nil
 }
 
-func (b *batch) commit() error {
-	if err := b.updateCommitted(true); err != nil {
+func (m *batchManager) commit(batch *batch) error {
+	if err := m.updateCommitted(batch, true); err != nil {
 		return fmt.Errorf("commit: %v", err)
 	}
-	if b.areBatchJobsCompleted() {
-		b.handleBatchJobsCompleted()
+	if m.areBatchJobsCompleted(batch) {
+		m.handleBatchJobsCompleted(batch)
 	}
 	return nil
 }
 
-func (b *batch) open() error {
-	if b.areBatchJobsCompleted() {
-		return fmt.Errorf("open: batch job (%s) has already completed", b.Id)
+func (m *batchManager) open(batch *batch) error {
+	if m.areBatchJobsCompleted(batch) {
+		return fmt.Errorf("open: batch job (%s) has already completed", batch.Id)
 	}
-	if err := b.updateCommitted(false); err != nil {
+	if err := m.updateCommitted(batch, false); err != nil {
 		return fmt.Errorf("open: %v", err)
 	}
 	return nil
 }
 
-func (b *batch) handleJobQueued(jobId string) error {
-	if err := b.addJobToBatch(jobId); err != nil {
+func (m *batchManager) handleJobQueued(batch *batch, jobId string) error {
+	if err := m.addJobToBatch(batch, jobId); err != nil {
 		return fmt.Errorf("jobQueued: add job to batch: %v", err)
 	}
 	return nil
 }
 
-func (b *batch) handleJobFinished(jobId string, success bool, isRetry bool) error {
-	if err := b.removeJobFromBatch(jobId, success, isRetry); err != nil {
+func (m *batchManager) handleJobFinished(batch *batch, jobId string, success bool, isRetry bool) error {
+	if err := m.removeJobFromBatch(batch, jobId, success, isRetry); err != nil {
 		return fmt.Errorf("jobFinished: %v", err)
 	}
-	if b.areBatchJobsCompleted() {
-		b.handleBatchJobsCompleted()
+	if m.areBatchJobsCompleted(batch) {
+		m.handleBatchJobsCompleted(batch)
 	}
 	return nil
 }
 
-func (b *batch) handleCallbackJobSucceeded(callbackType string) error {
-	if err := b.updateJobCallbackState(callbackType, CallbackJobSucceeded); err != nil {
+func (m *batchManager) handleCallbackJobSucceeded(batch *batch, callbackType string) error {
+	batch.mu.Lock()
+	defer batch.mu.Unlock()
+	if err := m.updateJobCallbackState(batch, callbackType, CallbackJobSucceeded); err != nil {
 		return fmt.Errorf("callbackJobSucceeded: update callback job state: %v", err)
 	}
 	return nil
 }
 
-func (b *batch) remove() error {
-	b.mu.Lock()
-	if err := b.rclient.SRem("batches", b.Id).Err(); err != nil {
-		return fmt.Errorf("remove: batch (%s) %v", b.Id, err)
+func (m *batchManager) remove(batch *batch) error {
+	if err := m.rclient.SRem("batches", batch.Id).Err(); err != nil {
+		return fmt.Errorf("remove: batch (%s) %v", batch.Id, err)
 	}
-	if err := b.rclient.Del(b.MetaKey).Err(); err != nil {
-		return fmt.Errorf("remove: batch meta (%s) %v", b.Id, err)
+	if err := m.rclient.Del(m.getMetaKey(batch.Id)).Err(); err != nil {
+		return fmt.Errorf("remove: batch meta (%s) %v", batch.Id, err)
 	}
-	if err := b.rclient.Del(b.JobsKey).Err(); err != nil {
-		return fmt.Errorf("remove: batch jobs (%s), %v", b.Id, err)
+	if err := m.rclient.Del(m.getParentsKey(batch.Id)).Err(); err != nil {
+		return fmt.Errorf("remove: batch parents (%s), %v", batch.Id, err)
 	}
-	if err := b.rclient.Del(b.ParentsKey).Err(); err != nil {
-		return fmt.Errorf("remove: batch parents (%s), %v", b.Id, err)
+	if err := m.rclient.Del(m.getChildKey(batch.Id)).Err(); err != nil {
+		return fmt.Errorf("remove: batch children (%s), %v", batch.Id, err)
 	}
-	if err := b.rclient.Del(b.ChildKey).Err(); err != nil {
-		return fmt.Errorf("remove: batch children (%s), %v", b.Id, err)
-	}
-	b.mu.Unlock()
 	return nil
 }
 
-func (b *batch) updateCommitted(committed bool) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.Meta.Committed = committed
-	if err := b.rclient.HSet(b.MetaKey, "committed", committed).Err(); err != nil {
+func (m *batchManager) updateCommitted(batch *batch, committed bool) error {
+	batch.mu.Lock()
+	defer batch.mu.Unlock()
+	batch.Meta.Committed = committed
+	if err := m.rclient.HSet(m.getMetaKey(batch.Id), "committed", committed).Err(); err != nil {
 		return fmt.Errorf("updateCommitted: could not update committed: %v", err)
 	}
 
 	if committed {
 		// number of days a batch can exist
-		if err := b.rclient.Expire(b.BatchKey, time.Duration(b.Subsystem.Options.CommittedTimeoutDays)*time.Hour*24).Err(); err != nil {
+		if err := m.rclient.Expire(m.getBatchKey(batch.Id), time.Duration(m.Subsystem.Options.CommittedTimeoutDays)*time.Hour*24).Err(); err != nil {
 			return fmt.Errorf("updatedCommitted: could not not expire after committed: %v", err)
 		}
 	} else {
-		if err := b.rclient.Expire(b.BatchKey, time.Duration(b.Subsystem.Options.UncommittedTimeoutMinutes)*time.Minute).Err(); err != nil {
+		if err := m.rclient.Expire(m.getBatchKey(batch.Id), time.Duration(m.Subsystem.Options.UncommittedTimeoutMinutes)*time.Minute).Err(); err != nil {
 			return fmt.Errorf("updatedCommitted: could not expire: %v", err)
 		}
 	}
 	return nil
 }
 
-func (b *batch) updateJobCallbackState(callbackType string, state string) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+func (m *batchManager) updateJobCallbackState(batch *batch, callbackType string, state string) error {
+	// locking must be handled outside of call
+	timeout := time.Duration(m.Subsystem.Options.CommittedTimeoutDays) * 24 * time.Hour
 	if callbackType == "success" {
-		b.Meta.SuccessJobState = state
-		if err := b.rclient.HSet(b.MetaKey, "success_st", state).Err(); err != nil {
+		batch.Meta.SuccessJobState = state
+		if err := m.rclient.SetNX(m.getSuccessJobStateKey(batch.Id), state, timeout).Err(); err != nil {
 			return fmt.Errorf("updateJobCallbackState: could not set success_st: %v", err)
 		}
+		if state == CallbackJobSucceeded {
+			m.removeBatch(batch)
+		}
 	} else {
-		b.Meta.CompleteJobState = state
-		if err := b.rclient.HSet(b.MetaKey, "completed_st", state).Err(); err != nil {
+		batch.Meta.CompleteJobState = state
+		if err := m.rclient.SetNX(m.getSuccessJobStateKey(batch.Id), state, timeout).Err(); err != nil {
 			return fmt.Errorf("updateJobCallbackState: could not set completed_st: %v", err)
 		}
 	}
 	return nil
 }
 
-func (b *batch) addJobToBatch(jobId string) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if err := b.rclient.SAdd(b.JobsKey, jobId).Err(); err != nil {
-		return fmt.Errorf("addJobToBatch: %v", err)
-	}
-	b.Meta.Total += 1
-	if err := b.rclient.HIncrBy(b.MetaKey, "total", 1).Err(); err != nil {
+func (m *batchManager) addJobToBatch(batch *batch, jobId string) error {
+	batch.mu.Lock()
+	defer batch.mu.Unlock()
+	batch.Meta.Total += 1
+	if err := m.rclient.HIncrBy(m.getMetaKey(batch.Id), "total", 1).Err(); err != nil {
 		return fmt.Errorf("addJobToBatch: unable to modify total: %v", err)
 	}
-	b.Meta.Pending += 1
-	if err := b.rclient.HIncrBy(b.MetaKey, "pending", 1).Err(); err != nil {
+	batch.Meta.Pending += 1
+	if err := m.rclient.HIncrBy(m.getMetaKey(batch.Id), "pending", 1).Err(); err != nil {
 		return fmt.Errorf("addJobToBatch: unable to modify pending: %v", err)
-	}
-	b.Jobs = append(b.Jobs, jobId)
-	if len(b.Jobs) == 1 {
-		// only set expire when adding the first job
-		if err := b.rclient.Expire(b.JobsKey, time.Duration(b.Subsystem.Options.CommittedTimeoutDays)*time.Hour*24).Err(); err != nil {
-			util.Warnf("addChild: could not set expiration for set storing batch children: %v", err)
-		}
 	}
 	return nil
 }
 
-func (b *batch) removeJobFromBatch(jobId string, success bool, isRetry bool) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+func (m *batchManager) removeJobFromBatch(batch *batch, jobId string, success bool, isRetry bool) error {
+	batch.mu.Lock()
+	defer batch.mu.Unlock()
 	if !isRetry {
-		// job has already been removed
-		if err := b.rclient.SRem(b.JobsKey, jobId).Err(); err != nil {
-			return fmt.Errorf("removeJobFromBatch: could not remove job key %v", err)
-		}
-		for i, v := range b.Jobs {
-			if v == jobId {
-				b.Jobs = append(b.Jobs[:i], b.Jobs[i+1:]...)
-				break
-			}
-		}
-		b.Meta.Pending -= 1
-		if err := b.rclient.HIncrBy(b.MetaKey, "pending", -1).Err(); err != nil {
+		batch.Meta.Pending -= 1
+		if err := m.rclient.HIncrBy(m.getMetaKey(batch.Id), "pending", -1).Err(); err != nil {
 			return fmt.Errorf("removeJobFromBatch: unable to modify pending: %v", err)
 		}
 
 	}
 	if success {
-		b.Meta.Succeeded += 1
-		if err := b.rclient.HIncrBy(b.MetaKey, "succeeded", 1).Err(); err != nil {
+		batch.Meta.Succeeded += 1
+		if err := m.rclient.HIncrBy(m.getMetaKey(batch.Id), "succeeded", 1).Err(); err != nil {
 			return fmt.Errorf("removeJobFromBatch: unable to modify succeeded: %v", err)
 		}
 	} else {
-		b.Meta.Failed += 1
-		if err := b.rclient.HIncrBy(b.MetaKey, "failed", 1).Err(); err != nil {
+		batch.Meta.Failed += 1
+		if err := m.rclient.HIncrBy(m.getMetaKey(batch.Id), "failed", 1).Err(); err != nil {
 			return fmt.Errorf("removeJobFromBatch: unable to modify failed: %v", err)
 		}
 	}
 	return nil
 }
 
-func (b *batch) areBatchJobsCompleted() bool {
-	return b.Meta.Committed == true && b.Meta.Pending == 0
+func (m *batchManager) areBatchJobsCompleted(batch *batch) bool {
+	return batch.Meta.Committed == true && batch.Meta.Pending == 0
 }
 
-func (b *batch) areBatchJobsSucceeded() bool {
-	return b.Meta.Committed == true && b.Meta.Succeeded == b.Meta.Total
+func (m *batchManager) areBatchJobsSucceeded(batch *batch) bool {
+	return batch.Meta.Committed == true && batch.Meta.Succeeded == batch.Meta.Total
 }
 
-func (b *batch) handleBatchJobsCompleted() {
+func (m *batchManager) handleBatchJobsCompleted(batch *batch) {
 	visited := map[string]bool{}
-	areChildrenFinished, areChildrenSucceeded := b.areChildrenFinished(visited)
+	areChildrenFinished, areChildrenSucceeded := m.areChildrenFinished(batch, visited)
 	if areChildrenFinished {
-		util.Infof("batch: %s children are finished", b.Id)
-		b.handleBatchCompleted(areChildrenSucceeded)
+		util.Infof("batch: %s children are finished", batch.Id)
+		m.handleBatchCompleted(batch, areChildrenSucceeded)
 	}
 	// notify parents child is done
-	for _, parent := range b.Parents {
-		parent.handleChildComplete(b, areChildrenFinished, areChildrenSucceeded, visited)
+	for _, parent := range batch.Parents {
+		m.handleChildComplete(parent, batch, areChildrenFinished, areChildrenSucceeded, visited)
 	}
 }
 
-func (b *batch) handleBatchCompleted(areChildrenSucceeded bool) {
+func (m *batchManager) handleBatchCompleted(batch *batch, areChildrenSucceeded bool) {
+	batch.mu.Lock()
+	defer batch.mu.Unlock()
 	// only create callback jobs if searched children are completed
-	if b.Meta.CompleteJob != "" && b.Meta.CompleteJobState == CallbackJobPending {
-		b.queueBatchDoneJob(b.Meta.CompleteJob, "complete")
+	if batch.Meta.CompleteJob != "" && batch.Meta.CompleteJobState == CallbackJobPending {
+		m.queueBatchDoneJob(batch, batch.Meta.CompleteJob, "complete")
 	}
-	if areChildrenSucceeded && b.Meta.Succeeded == b.Meta.Total && b.Meta.SuccessJob != "" && b.Meta.SuccessJobState == CallbackJobPending {
-		b.queueBatchDoneJob(b.Meta.SuccessJob, "success")
+	if areChildrenSucceeded && batch.Meta.Succeeded == batch.Meta.Total && batch.Meta.SuccessJob != "" && batch.Meta.SuccessJobState == CallbackJobPending {
+		m.queueBatchDoneJob(batch, batch.Meta.SuccessJob, "success")
 	}
-	b.removeChildren()
+	if areChildrenSucceeded {
+		m.removeChildren(batch)
+	}
 }
 
-func (b *batch) queueBatchDoneJob(jobData string, callbackType string) {
+func (m *batchManager) queueBatchDoneJob(batch *batch, jobData string, callbackType string) {
 	var job client.Job
 	if err := json.Unmarshal([]byte(jobData), &job); err != nil {
 		util.Warnf("queueBatchDoneJob: unmarshal job(%s): %v", callbackType, err)
 		return
 	}
 	if job.Jid == "" {
-		job.Jid = fmt.Sprintf("%s-%s", b.Id, callbackType)
+		job.Jid = fmt.Sprintf("%s-%s", batch.Id, callbackType)
 	}
 	// these are required to update the call back job state
-	job.SetCustom("_bid", b.Id)
+	job.SetCustom("_bid", batch.Id)
 	job.SetCustom("_cb", callbackType)
-	if err := b.Subsystem.Server.Manager().Push(&job); err != nil {
+	if err := m.Subsystem.Server.Manager().Push(&job); err != nil {
 		util.Warnf("queueBatchDoneJob: cannot push job (%s) %v", callbackType, err)
 		return
 	}
-	if err := b.updateJobCallbackState(callbackType, CallbackJobQueued); err != nil {
+	if err := m.updateJobCallbackState(batch, callbackType, CallbackJobQueued); err != nil {
 		util.Warnf("queueBatchDoneJob: could not update job callback state: %v", err)
 	}
 	util.Infof("Pushed %s job (jid: %s)", callbackType, job.Jid)
