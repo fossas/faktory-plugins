@@ -37,7 +37,7 @@ func (b *BatchSubsystem) Start(s *server.Server) error {
 	b.Server = s
 	b.batchManager = &batchManager{
 		Batches:   make(map[string]*batch),
-		mu:        sync.Mutex{},
+		mu:        sync.RWMutex{},
 		rclient:   b.Server.Manager().Redis(),
 		Subsystem: b,
 	}

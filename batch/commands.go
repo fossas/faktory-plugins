@@ -61,7 +61,6 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 
 		meta := b.batchManager.newBatchMeta(batchRequest.Description, success, complete, batchRequest.ChildSearchDepth)
 		batch, err := b.batchManager.newBatch(batchId, meta)
-
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("unable to create batch: %v", err))
 			return
@@ -77,6 +76,8 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			_ = c.Error(cmd, fmt.Errorf("cannot get batch: %v", err))
 			return
 		}
+		batch.mu.Lock()
+		defer batch.mu.Unlock()
 
 		if b.batchManager.areBatchJobsCompleted(batch) {
 			_ = c.Error(cmd, errors.New("batch has already finished"))
@@ -103,6 +104,8 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			_ = c.Error(cmd, fmt.Errorf("cannot get batch: %v", err))
 			return
 		}
+		batch.mu.Lock()
+		defer batch.mu.Unlock()
 
 		if err := b.batchManager.commit(batch); err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot commit batch: %v", err))
@@ -125,12 +128,15 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			_ = c.Error(cmd, fmt.Errorf("cannot get batch: %v", err))
 			return
 		}
-
+		batch.mu.Lock()
+		defer batch.mu.Unlock()
+		opened := false
 		if batch.Meta.Committed {
-			_ = c.Error(cmd, errors.New("batch has already been committed, child batches cannot be added"))
-			return
+			if err := b.batchManager.open(batch); err != nil {
+				_ = c.Error(cmd, errors.New("cannot open committed batch"))
+			}
+			opened = true
 		}
-
 		if b.batchManager.areBatchJobsCompleted(batch) {
 			_ = c.Error(cmd, errors.New("batch has already finished"))
 			return
@@ -141,11 +147,14 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			_ = c.Error(cmd, fmt.Errorf("cannot get child batch: %v", err))
 			return
 		}
-
 		if err := b.batchManager.addChild(batch, childBatch); err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot add child (%s) to batch (%s): %v", childBatchId, batchId, err))
 		}
-
+		if opened {
+			if err := b.batchManager.commit(batch); err != nil {
+				_ = c.Error(cmd, errors.New("cannot commit batch"))
+			}
+		}
 		_ = c.Ok()
 		return
 	case "STATUS":
