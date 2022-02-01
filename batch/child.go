@@ -8,8 +8,6 @@ import (
 )
 
 func (m *batchManager) addChild(batch *batch, childBatch *batch) error {
-	batch.mu.Lock()
-	defer batch.mu.Unlock()
 	if childBatch.Id == batch.Id {
 		return fmt.Errorf("addChild: child batch is the same as the parent")
 	}
@@ -23,6 +21,10 @@ func (m *batchManager) addChild(batch *batch, childBatch *batch) error {
 	if err := m.rclient.SAdd(m.getChildKey(batch.Id), childBatch.Id).Err(); err != nil {
 		return fmt.Errorf("addChild: cannot save child (%s) to batch (%s) %v", childBatch.Id, batch.Id, err)
 	}
+	batch.Meta.ChildCount += 1
+	if err := m.rclient.HIncrBy(m.getMetaKey(batch.Id), "child_count", 1).Err(); err != nil {
+		return fmt.Errorf("addChild: cannot increment cihldren_count to batch (%s) %v", batch.Id, err)
+	}
 	if len(batch.Children) == 1 {
 		// only set expire when adding the first child
 		if err := m.rclient.Expire(m.getChildKey(batch.Id), time.Duration(m.Subsystem.Options.CommittedTimeoutDays)*time.Hour*24).Err(); err != nil {
@@ -33,14 +35,12 @@ func (m *batchManager) addChild(batch *batch, childBatch *batch) error {
 		return fmt.Errorf("addChild: erorr adding parent batch (%s) to child (%s): %v", batch.Id, childBatch.Id, err)
 	}
 	if m.areBatchJobsCompleted(batch) {
-		m.handleBatchJobsCompleted(batch)
+		m.handleBatchJobsCompleted(batch, map[string]bool{batch.Id: true})
 	}
 	return nil
 }
 
 func (m *batchManager) addParent(batch *batch, parentBatch *batch) error {
-	batch.mu.Lock()
-	defer batch.mu.Unlock()
 	if parentBatch.Id == batch.Id {
 		return fmt.Errorf("addParent: parent batch is the same as the child")
 	}
@@ -64,8 +64,6 @@ func (m *batchManager) addParent(batch *batch, parentBatch *batch) error {
 }
 
 func (m *batchManager) removeParent(batch *batch, parentBatch *batch) error {
-	batch.mu.Lock()
-	defer batch.mu.Unlock()
 	for i, p := range batch.Parents {
 		if p.Id == parentBatch.Id {
 			batch.Parents = append(batch.Parents[:i], batch.Parents[i+1:]...)
@@ -85,10 +83,14 @@ func (m *batchManager) removeChildren(b *batch) {
 		if err := m.rclient.Del(m.getChildKey(b.Id)).Err(); err != nil {
 			util.Warnf("removeChildren: unable to remove child batches from %s: %v", b.Id, err)
 		}
+		b.Meta.ChildCount = 0
+		if err := m.rclient.HSet(m.getMetaKey(b.Id), "child_count", 0).Err(); err != nil {
+			util.Warnf("removeChildren: unable to remove child batches from %s: %v", b.Id, err)
+		}
 	}
 }
 
-func (m *batchManager) handleChildComplete(batch *batch, childBatch *batch, areChildsChildrenFinished bool, areChildsChildrenSucceeded bool, visited map[string]bool) {
+func (m *batchManager) handleChildComplete(batch *batch, childBatch *batch, areChildsChildrenFinished bool, areChildsChildrenSucceeded bool, parentsVisited map[string]bool) {
 	if areChildsChildrenFinished && areChildsChildrenSucceeded {
 		// batch can be removed as a parent to stop propagation
 		if err := m.removeParent(childBatch, batch); err != nil {
@@ -96,15 +98,15 @@ func (m *batchManager) handleChildComplete(batch *batch, childBatch *batch, areC
 		}
 	}
 	if m.areBatchJobsCompleted(batch) {
-		m.handleBatchJobsCompleted(batch)
+		m.handleBatchJobsCompleted(batch, parentsVisited)
 	}
 }
 
-func (m *batchManager) areChildrenFinished(b *batch, visited map[string]bool) (bool, bool) {
+func (m *batchManager) areChildrenFinished(b *batch) (bool, bool) {
 	// iterate through children up to a certain depth
 	// check to see if any batch still has jobs being processed
 	currentDepth := 1
-	visited[b.Id] = true // handle circular cases
+	visited := map[string]bool{b.Id: true} // handle circular cases
 	stack := b.Children
 	var childStack []*batch
 	var child *batch
@@ -122,6 +124,10 @@ func (m *batchManager) areChildrenFinished(b *batch, visited map[string]bool) (b
 		}
 		visited[child.Id] = true
 		if !m.areBatchJobsCompleted(child) {
+			return false, false
+		}
+		if len(child.Children) != child.Meta.ChildCount && child.Meta.ChildCount != 0 {
+			// one of the child batches timed out
 			return false, false
 		}
 		if succeeded && !m.areBatchJobsSucceeded(child) {

@@ -34,13 +34,14 @@ type batchMeta struct {
 	SuccessJobState  string
 	CompleteJobState string
 	ChildSearchDepth *int
+	ChildCount       int
 }
 
 type batchManager struct {
 	Batches   map[string]*batch
 	Subsystem *BatchSubsystem
 	rclient   *redis.Client
-	mu        sync.Mutex
+	mu        sync.RWMutex
 }
 
 const (
@@ -108,7 +109,7 @@ func (m *batchManager) loadExistingBatches() error {
 		}
 
 		if m.areBatchJobsCompleted(b) {
-			m.handleBatchJobsCompleted(b)
+			m.handleBatchJobsCompleted(b, map[string]bool{b.Id: true})
 		}
 	}
 
@@ -116,8 +117,8 @@ func (m *batchManager) loadExistingBatches() error {
 }
 
 func (m *batchManager) getBatch(batchId string) (*batch, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	if batchId == "" {
 		return nil, fmt.Errorf("getBatch: batchId cannot be blank")
 	}
@@ -134,9 +135,7 @@ func (m *batchManager) getBatch(batchId string) (*batch, error) {
 		return nil, fmt.Errorf("getBatch: unable to check if batch has timed out")
 	}
 	if exists == 0 {
-		b.mu.Lock()
 		m.removeBatch(b)
-		b.mu.Unlock()
 		return nil, fmt.Errorf("getBatch: batch was not committed within 2 hours")
 	}
 
@@ -193,6 +192,7 @@ func (m *batchManager) newBatchMeta(description string, success string, complete
 		SuccessJobState:  CallbackJobPending,
 		CompleteJobState: CallbackJobPending,
 		ChildSearchDepth: childSearchDepth,
+		ChildCount:       0,
 	}
 }
 
@@ -266,6 +266,7 @@ func (m *batchManager) init(batch *batch) error {
 			"committed":    batch.Meta.Committed,
 			"success_job":  batch.Meta.SuccessJob,
 			"complete_job": batch.Meta.CompleteJob,
+			"child_count":  batch.Meta.ChildCount,
 		}
 		if batch.Meta.ChildSearchDepth != nil {
 			data["child_search_depth"] = *batch.Meta.ChildSearchDepth
@@ -300,6 +301,10 @@ func (m *batchManager) init(batch *batch) error {
 		return fmt.Errorf("init: succeeded: failed converting string to int: %v", err)
 	}
 	batch.Meta.Pending, err = strconv.Atoi(meta["pending"])
+	if err != nil {
+		return fmt.Errorf("init: pending: failed converting string to int: %v", err)
+	}
+	batch.Meta.ChildCount, err = strconv.Atoi(meta["child_count"])
 	if err != nil {
 		return fmt.Errorf("init: pending: failed converting string to int: %v", err)
 	}
@@ -343,7 +348,7 @@ func (m *batchManager) commit(batch *batch) error {
 		return fmt.Errorf("commit: %v", err)
 	}
 	if m.areBatchJobsCompleted(batch) {
-		m.handleBatchJobsCompleted(batch)
+		m.handleBatchJobsCompleted(batch, map[string]bool{batch.Id: true})
 	}
 	return nil
 }
@@ -358,8 +363,8 @@ func (m *batchManager) open(batch *batch) error {
 	return nil
 }
 
-func (m *batchManager) handleJobQueued(batch *batch, jobId string) error {
-	if err := m.addJobToBatch(batch, jobId); err != nil {
+func (m *batchManager) handleJobQueued(batch *batch) error {
+	if err := m.addJobToBatch(batch); err != nil {
 		return fmt.Errorf("jobQueued: add job to batch: %v", err)
 	}
 	return nil
@@ -370,14 +375,12 @@ func (m *batchManager) handleJobFinished(batch *batch, jobId string, success boo
 		return fmt.Errorf("jobFinished: %v", err)
 	}
 	if m.areBatchJobsCompleted(batch) {
-		m.handleBatchJobsCompleted(batch)
+		m.handleBatchJobsCompleted(batch, map[string]bool{batch.Id: true})
 	}
 	return nil
 }
 
 func (m *batchManager) handleCallbackJobSucceeded(batch *batch, callbackType string) error {
-	batch.mu.Lock()
-	defer batch.mu.Unlock()
 	if err := m.updateJobCallbackState(batch, callbackType, CallbackJobSucceeded); err != nil {
 		return fmt.Errorf("callbackJobSucceeded: update callback job state: %v", err)
 	}
@@ -401,8 +404,6 @@ func (m *batchManager) remove(batch *batch) error {
 }
 
 func (m *batchManager) updateCommitted(batch *batch, committed bool) error {
-	batch.mu.Lock()
-	defer batch.mu.Unlock()
 	batch.Meta.Committed = committed
 	if err := m.rclient.HSet(m.getMetaKey(batch.Id), "committed", committed).Err(); err != nil {
 		return fmt.Errorf("updateCommitted: could not update committed: %v", err)
@@ -426,7 +427,7 @@ func (m *batchManager) updateJobCallbackState(batch *batch, callbackType string,
 	timeout := time.Duration(m.Subsystem.Options.CommittedTimeoutDays) * 24 * time.Hour
 	if callbackType == "success" {
 		batch.Meta.SuccessJobState = state
-		if err := m.rclient.SetNX(m.getSuccessJobStateKey(batch.Id), state, timeout).Err(); err != nil {
+		if err := m.rclient.Set(m.getSuccessJobStateKey(batch.Id), state, timeout).Err(); err != nil {
 			return fmt.Errorf("updateJobCallbackState: could not set success_st: %v", err)
 		}
 		if state == CallbackJobSucceeded {
@@ -434,16 +435,14 @@ func (m *batchManager) updateJobCallbackState(batch *batch, callbackType string,
 		}
 	} else {
 		batch.Meta.CompleteJobState = state
-		if err := m.rclient.SetNX(m.getSuccessJobStateKey(batch.Id), state, timeout).Err(); err != nil {
+		if err := m.rclient.Set(m.getCompleteJobStateKey(batch.Id), state, timeout).Err(); err != nil {
 			return fmt.Errorf("updateJobCallbackState: could not set completed_st: %v", err)
 		}
 	}
 	return nil
 }
 
-func (m *batchManager) addJobToBatch(batch *batch, jobId string) error {
-	batch.mu.Lock()
-	defer batch.mu.Unlock()
+func (m *batchManager) addJobToBatch(batch *batch) error {
 	batch.Meta.Total += 1
 	if err := m.rclient.HIncrBy(m.getMetaKey(batch.Id), "total", 1).Err(); err != nil {
 		return fmt.Errorf("addJobToBatch: unable to modify total: %v", err)
@@ -456,8 +455,6 @@ func (m *batchManager) addJobToBatch(batch *batch, jobId string) error {
 }
 
 func (m *batchManager) removeJobFromBatch(batch *batch, jobId string, success bool, isRetry bool) error {
-	batch.mu.Lock()
-	defer batch.mu.Unlock()
 	if !isRetry {
 		batch.Meta.Pending -= 1
 		if err := m.rclient.HIncrBy(m.getMetaKey(batch.Id), "pending", -1).Err(); err != nil {
@@ -487,22 +484,26 @@ func (m *batchManager) areBatchJobsSucceeded(batch *batch) bool {
 	return batch.Meta.Committed == true && batch.Meta.Succeeded == batch.Meta.Total
 }
 
-func (m *batchManager) handleBatchJobsCompleted(batch *batch) {
-	visited := map[string]bool{}
-	areChildrenFinished, areChildrenSucceeded := m.areChildrenFinished(batch, visited)
+func (m *batchManager) handleBatchJobsCompleted(batch *batch, parentsVisited map[string]bool) {
+	areChildrenFinished, areChildrenSucceeded := m.areChildrenFinished(batch)
 	if areChildrenFinished {
 		util.Infof("batch: %s children are finished", batch.Id)
 		m.handleBatchCompleted(batch, areChildrenSucceeded)
 	}
 	// notify parents child is done
 	for _, parent := range batch.Parents {
-		m.handleChildComplete(parent, batch, areChildrenFinished, areChildrenSucceeded, visited)
+		if parentsVisited[parent.Id] {
+			// parent has already been notified
+			continue
+		}
+		parent.mu.Lock()
+		parentsVisited[parent.Id] = true
+		m.handleChildComplete(parent, batch, areChildrenFinished, areChildrenSucceeded, parentsVisited)
+		parent.mu.Unlock()
 	}
 }
 
 func (m *batchManager) handleBatchCompleted(batch *batch, areChildrenSucceeded bool) {
-	batch.mu.Lock()
-	defer batch.mu.Unlock()
 	// only create callback jobs if searched children are completed
 	if batch.Meta.CompleteJob != "" && batch.Meta.CompleteJobState == CallbackJobPending {
 		m.queueBatchDoneJob(batch, batch.Meta.CompleteJob, "complete")

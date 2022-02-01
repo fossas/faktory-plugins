@@ -72,6 +72,9 @@ func TestChildBatch(t *testing.T) {
 					assert.Nil(t, err)
 					assert.Equal(t, val, "OK")
 
+					val, err = cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", batchA1.Bid, batch.Bid))
+					assert.Nil(t, err)
+					assert.Equal(t, val, "OK")
 					return nil
 				})
 				assert.Nil(t, err)
