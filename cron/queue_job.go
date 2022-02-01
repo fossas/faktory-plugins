@@ -31,8 +31,9 @@ func (c *QueueJob) Run() {
 	// job has already been validated as a proper job on startup
 	if err := c.Subsystem.Server.Manager().Push(&job); err != nil {
 		util.Warnf("Execute: unable to queue job (%s): %v", c.job.Name, err)
+		return
 	}
-	util.Infof("Queueing job: %s", c.job.Name)
+	util.Debugf("Queueing job: %s", c.job.Name)
 
 	return
 }
