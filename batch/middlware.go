@@ -19,7 +19,7 @@ func (b *BatchSubsystem) pushMiddleware(next func() error, ctx manager.Context) 
 			util.Warnf("unable to add batch %v", err)
 			return fmt.Errorf("pushMiddleware: Unable to add job %s to batch %s", ctx.Job().Jid, bid)
 		}
-		util.Infof("Added %s to batch %s", ctx.Job().Jid, batch.Id)
+		util.Debugf("Added %s to batch %s", ctx.Job().Jid, batch.Id)
 	}
 	return next()
 }
@@ -63,7 +63,7 @@ func (b *BatchSubsystem) handleJobFinished(success bool) func(next func() error,
 			if !success {
 				status = "failed"
 			}
-			util.Infof("Job(%s) %s for batch %s", ctx.Job().Jid, status, batch.Id)
+			util.Debugf("Job(%s) %s for batch %s", ctx.Job().Jid, status, batch.Id)
 
 			isRetry := ctx.Job().Failure != nil && ctx.Job().Failure.RetryCount > 0
 

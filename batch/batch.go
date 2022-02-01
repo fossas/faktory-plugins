@@ -487,7 +487,7 @@ func (m *batchManager) areBatchJobsSucceeded(batch *batch) bool {
 func (m *batchManager) handleBatchJobsCompleted(batch *batch, parentsVisited map[string]bool) {
 	areChildrenFinished, areChildrenSucceeded := m.areChildrenFinished(batch)
 	if areChildrenFinished {
-		util.Infof("batch: %s children are finished", batch.Id)
+		util.Debugf("batch: %s children are finished", batch.Id)
 		m.handleBatchCompleted(batch, areChildrenSucceeded)
 	}
 	// notify parents child is done
