@@ -59,6 +59,11 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			complete = string(completeData)
 		}
 
+		if len(success) == 0 && len(complete) == 0 {
+			_ = c.Error(cmd, fmt.Errorf("success and/or a complete job callback must be included in batch creation"))
+			return
+		}
+
 		meta := b.batchManager.newBatchMeta(batchRequest.Description, success, complete, batchRequest.ChildSearchDepth)
 		batch, err := b.batchManager.newBatch(batchId, meta)
 		if err != nil {
