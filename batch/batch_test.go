@@ -73,6 +73,73 @@ func TestBatchSuccess(t *testing.T) {
 
 		fetchedJob, err := cl.Fetch("default")
 		assert.Nil(t, fetchedJob)
+
+		_, err = batchSystem.batchManager.getBatch(b.Bid)
+
+		// ensure batch is removed
+		assert.Error(t, err)
+		assert.EqualError(t, err, "getBatch: no batch found")
+	})
+}
+
+func TestBatchSuccessWithoutSuccessCallback(t *testing.T) {
+	batchSystem := new(BatchSubsystem)
+	withServer(batchSystem, true, func(cl *client.Client) {
+		b := client.NewBatch(cl)
+
+		b.Complete = client.NewJob("batchDone", 1, "string", 3)
+		b.Description = "Test batch"
+
+		err := b.Jobs(func() error {
+			err := b.Push(client.NewJob("JobOne", 1))
+			assert.Nil(t, err)
+			err = b.Push(client.NewJob("JobTwo", 2))
+			assert.Nil(t, err)
+			return nil
+		})
+		assert.Nil(t, err)
+		assert.NotEqual(t, "", b.Bid)
+
+		time.Sleep(1 * time.Second)
+		batchData, err := batchSystem.batchManager.getBatch(b.Bid)
+		assert.Nil(t, err)
+		assert.Equal(t, 2, batchData.Meta.Total)
+
+		// job one
+		err = processJob(cl, true, func(job *client.Job) {
+			assert.Equal(t, 0, batchData.Meta.Succeeded)
+		})
+		assert.Nil(t, err)
+		assert.Equal(t, 1, batchData.Meta.Succeeded)
+		assert.False(t, batchSystem.batchManager.areBatchJobsCompleted(batchData))
+
+		// job two
+		err = processJob(cl, true, func(job *client.Job) {
+			assert.Equal(t, batchData.Meta.Succeeded, 1)
+			assert.Equal(t, batchData.Meta.Failed, 0)
+		})
+
+		assert.Nil(t, err)
+		assert.Equal(t, 2, batchData.Meta.Succeeded)
+		assert.Equal(t, 0, batchData.Meta.Failed)
+		assert.True(t, batchSystem.batchManager.areBatchJobsCompleted(batchData))
+
+		assert.Equal(t, "1", batchData.Meta.CompleteJobState)
+		// completeJob
+		err = processJob(cl, true, func(job *client.Job) {
+			assert.Equal(t, "batchDone", job.Type)
+		})
+		assert.Nil(t, err)
+		assert.Equal(t, "2", batchData.Meta.CompleteJobState)
+
+		fetchedJob, err := cl.Fetch("default")
+		assert.Nil(t, fetchedJob)
+
+		_, err = batchSystem.batchManager.getBatch(b.Bid)
+
+		// ensure batch is removed
+		assert.Error(t, err)
+		assert.EqualError(t, err, "getBatch: no batch found")
 	})
 }
 
@@ -285,6 +352,30 @@ func TestBatchOptions(t *testing.T) {
 	withServer(batchSystem, false, func(cl *client.Client) {
 		assert.False(t, batchSystem.Options.Enabled)
 		assert.Nil(t, batchSystem.Server)
+	})
+}
+
+func TestBatchBatchWithoutCallbacks(t *testing.T) {
+	batchSystem := new(BatchSubsystem)
+	withServer(batchSystem, true, func(cl *client.Client) {
+		b := client.NewBatch(cl)
+
+		err := b.Jobs(func() error {
+			err := b.Push(client.NewJob("JobOne", 1))
+			assert.Nil(t, err)
+
+			err = b.Push(client.NewJob("JobTwo", 1))
+			assert.Nil(t, err)
+
+			err = b.Push(client.NewJob("JobThree", 1))
+			assert.Nil(t, err)
+
+			err = b.Push(client.NewJob("JobFour", 1))
+			assert.Nil(t, err)
+			return nil
+		})
+		assert.Error(t, err)
+		assert.EqualError(t, err, "cannot create new batch: ERR success and/or a complete job callback must be included in batch creation")
 	})
 }
 

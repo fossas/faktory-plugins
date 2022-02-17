@@ -438,7 +438,7 @@ func (m *batchManager) updateJobCallbackState(batch *batch, callbackType string,
 		if err := m.rclient.Set(m.getCompleteJobStateKey(batch.Id), state, timeout).Err(); err != nil {
 			return fmt.Errorf("updateJobCallbackState: could not set completed_st: %v", err)
 		}
-		if _, areChildrenSucceeded := m.areChildrenFinished(batch); areChildrenSucceeded && batch.Meta.SuccessJob == "" {
+		if _, areChildrenSucceeded := m.areChildrenFinished(batch); areChildrenSucceeded && batch.Meta.SuccessJob == "" && state == CallbackJobSucceeded {
 			m.removeBatch(batch)
 		}
 	}
