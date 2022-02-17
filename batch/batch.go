@@ -438,16 +438,19 @@ func (m *batchManager) updateJobCallbackState(batch *batch, callbackType string,
 		if err := m.rclient.Set(m.getCompleteJobStateKey(batch.Id), state, timeout).Err(); err != nil {
 			return fmt.Errorf("updateJobCallbackState: could not set completed_st: %v", err)
 		}
+		if _, areChildrenSucceeded := m.areChildrenFinished(batch); areChildrenSucceeded && batch.Meta.SuccessJob == "" {
+			m.removeBatch(batch)
+		}
 	}
 	return nil
 }
 
 func (m *batchManager) addJobToBatch(batch *batch) error {
-	batch.Meta.Total += 1
+	batch.Meta.Total++
 	if err := m.rclient.HIncrBy(m.getMetaKey(batch.Id), "total", 1).Err(); err != nil {
 		return fmt.Errorf("addJobToBatch: unable to modify total: %v", err)
 	}
-	batch.Meta.Pending += 1
+	batch.Meta.Pending++
 	if err := m.rclient.HIncrBy(m.getMetaKey(batch.Id), "pending", 1).Err(); err != nil {
 		return fmt.Errorf("addJobToBatch: unable to modify pending: %v", err)
 	}
@@ -456,19 +459,19 @@ func (m *batchManager) addJobToBatch(batch *batch) error {
 
 func (m *batchManager) removeJobFromBatch(batch *batch, jobId string, success bool, isRetry bool) error {
 	if !isRetry {
-		batch.Meta.Pending -= 1
+		batch.Meta.Pending--
 		if err := m.rclient.HIncrBy(m.getMetaKey(batch.Id), "pending", -1).Err(); err != nil {
 			return fmt.Errorf("removeJobFromBatch: unable to modify pending: %v", err)
 		}
 
 	}
 	if success {
-		batch.Meta.Succeeded += 1
+		batch.Meta.Succeeded++
 		if err := m.rclient.HIncrBy(m.getMetaKey(batch.Id), "succeeded", 1).Err(); err != nil {
 			return fmt.Errorf("removeJobFromBatch: unable to modify succeeded: %v", err)
 		}
 	} else {
-		batch.Meta.Failed += 1
+		batch.Meta.Failed++
 		if err := m.rclient.HIncrBy(m.getMetaKey(batch.Id), "failed", 1).Err(); err != nil {
 			return fmt.Errorf("removeJobFromBatch: unable to modify failed: %v", err)
 		}
@@ -477,11 +480,11 @@ func (m *batchManager) removeJobFromBatch(batch *batch, jobId string, success bo
 }
 
 func (m *batchManager) areBatchJobsCompleted(batch *batch) bool {
-	return batch.Meta.Committed == true && batch.Meta.Pending == 0
+	return batch.Meta.Committed && batch.Meta.Pending == 0
 }
 
 func (m *batchManager) areBatchJobsSucceeded(batch *batch) bool {
-	return batch.Meta.Committed == true && batch.Meta.Succeeded == batch.Meta.Total
+	return batch.Meta.Committed && batch.Meta.Succeeded == batch.Meta.Total
 }
 
 func (m *batchManager) handleBatchJobsCompleted(batch *batch, parentsVisited map[string]bool) {

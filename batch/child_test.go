@@ -397,6 +397,8 @@ func TestChildBatch(t *testing.T) {
 				err := b.Push(client.NewJob("A", 1))
 				assert.Nil(t, err)
 				batchA = client.NewBatch(cl)
+				batchA.Complete = client.NewJob("batchDone", 1, "string", 3)
+				batchA.Success = client.NewJob("batchSuccess", 2, "string", 4)
 				_, err = cl.BatchNew(batchA)
 				val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", b.Bid, batchA.Bid))
 				assert.Nil(t, err)
