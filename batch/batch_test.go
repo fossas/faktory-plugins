@@ -388,7 +388,6 @@ func TestRemoveStaleBatches(t *testing.T) {
 		committedBatchId := fmt.Sprintf("b-%s", util.RandomJid())
 		meta := batchSystem.batchManager.newBatchMeta("testing", "", "", nil)
 		meta.CreatedAt = time.Now().UTC().Add(-time.Duration(1)*time.Minute).AddDate(0, 0, -batchSystem.Options.CommittedTimeoutDays).Format(time.RFC3339Nano)
-		fmt.Println(meta.CreatedAt)
 		batch, err := batchSystem.batchManager.newBatch(committedBatchId, meta)
 		assert.Nil(t, err)
 		err = batchSystem.batchManager.commit(batch)
