@@ -2,6 +2,8 @@ package batch
 
 import (
 	"errors"
+	"fmt"
+	"github.com/contribsys/faktory/util"
 	"math/rand"
 	"os"
 	"strconv"
@@ -376,6 +378,35 @@ func TestBatchBatchWithoutCallbacks(t *testing.T) {
 		})
 		assert.Error(t, err)
 		assert.EqualError(t, err, "cannot create new batch: ERR success and/or a complete job callback must be included in batch creation")
+	})
+}
+
+func TestRemoveStaleBatches(t *testing.T) {
+	batchSystem := new(BatchSubsystem)
+
+	withServer(batchSystem, true, func(cl *client.Client) {
+		committedBatchId := fmt.Sprintf("b-%s", util.RandomJid())
+		meta := batchSystem.batchManager.newBatchMeta("testing", "", "", nil)
+		meta.CreatedAt = time.Now().UTC().Add(-time.Duration(1)*time.Minute).AddDate(0, 0, -batchSystem.Options.CommittedTimeoutDays).Format(time.RFC3339Nano)
+		fmt.Println(meta.CreatedAt)
+		batch, err := batchSystem.batchManager.newBatch(committedBatchId, meta)
+		assert.Nil(t, err)
+		err = batchSystem.batchManager.commit(batch)
+		assert.Nil(t, err)
+
+		uncommittedBatchId := fmt.Sprintf("b-%s", util.RandomJid())
+		uncommittedMeta := batchSystem.batchManager.newBatchMeta("testing", "", "", nil)
+		uncommittedMeta.CreatedAt = time.Now().UTC().Add(-time.Duration(batchSystem.Options.UncommittedTimeoutMinutes+1) * time.Minute).UTC().Format(time.RFC3339Nano)
+		_, err = batchSystem.batchManager.newBatch(uncommittedBatchId, uncommittedMeta)
+		assert.Nil(t, err)
+
+		batchSystem.batchManager.removeStaleBatches()
+
+		_, err = batchSystem.batchManager.getBatch(committedBatchId)
+		assert.EqualError(t, err, "getBatch: no batch found")
+
+		_, err = batchSystem.batchManager.getBatch(uncommittedBatchId)
+		assert.EqualError(t, err, "getBatch: no batch found")
 	})
 }
 
