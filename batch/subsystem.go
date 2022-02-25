@@ -70,28 +70,28 @@ func (b *BatchSubsystem) getOptions(s *server.Server) *Options {
 		enabled = false
 	}
 	childSearchDepthValue := s.Options.Config("batch", "child_search_depth", 0)
-	childSearchDepth, ok := childSearchDepthValue.(int)
+	childSearchDepth, ok := childSearchDepthValue.(int64)
 	if !ok {
 		childSearchDepth = 0
 	}
 
 	uncommittedTimeoutValue := s.Options.Config("batch", "uncommitted_timeout_minutes", 120)
-	uncommittedTimeout, ok := uncommittedTimeoutValue.(int)
+	uncommittedTimeout, ok := uncommittedTimeoutValue.(int64)
 	if !ok {
 		uncommittedTimeout = 120
 	}
 
 	committedTimeoutValue := s.Options.Config("batch", "committed_timeout_days", 7)
-	committedTimeout, ok := committedTimeoutValue.(int)
+	committedTimeout, ok := committedTimeoutValue.(int64)
 	if !ok {
 		committedTimeout = 7
 	}
 
 	return &Options{
 		Enabled:                   enabled,
-		ChildSearchDepth:          childSearchDepth,
-		UncommittedTimeoutMinutes: uncommittedTimeout,
-		CommittedTimeoutDays:      committedTimeout,
+		ChildSearchDepth:          int(childSearchDepth),
+		UncommittedTimeoutMinutes: int(uncommittedTimeout),
+		CommittedTimeoutDays:      int(committedTimeout),
 	}
 }
 
