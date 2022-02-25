@@ -154,19 +154,18 @@ func (m *batchManager) removeBatch(batch *batch) {
 }
 
 func (m *batchManager) removeStaleBatches() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	util.Debugf("Checking for stale batches")
 	for _, b := range m.Batches {
 		createdAt, err := time.Parse(time.RFC3339Nano, b.Meta.CreatedAt)
 		if err != nil {
 			continue
 		}
 		remove := false
-		uncomittedTimeout := time.Now().Add(-time.Duration(m.Subsystem.Options.UncommittedTimeoutMinutes) * time.Minute)
-		comittedTimeout := time.Now().AddDate(0, 0, -m.Subsystem.Options.CommittedTimeoutDays)
-		if !b.Meta.Committed && createdAt.Before(uncomittedTimeout) {
+		uncommittedTimeout := time.Now().Add(-time.Duration(m.Subsystem.Options.UncommittedTimeoutMinutes) * time.Minute).UTC()
+		committedTimeout := time.Now().AddDate(0, 0, -m.Subsystem.Options.CommittedTimeoutDays).UTC()
+		if !b.Meta.Committed && createdAt.Before(uncommittedTimeout) {
 			remove = true
-		} else if b.Meta.Committed && createdAt.Before(comittedTimeout) {
+		} else if b.Meta.Committed && createdAt.Before(committedTimeout) {
 			remove = true
 		}
 
