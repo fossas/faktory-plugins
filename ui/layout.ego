@@ -1,0 +1,41 @@
+<%
+package ui
+
+import (
+"net/http"
+
+"github.com/contribsys/faktory/client"
+)
+
+func Ego_layout(w io.Writer, req *http.Request, yield func()) {
+%>
+<!doctype html>
+<html lang="eng">
+<head>
+  <title><%= client.Name %></title>
+  <meta charset="utf8" />
+  <link rel="shortcut icon" href="<%= Relative(req, "/static/img/favicon.ico") %>">
+  <link rel="mask-icon" href="<%= Relative(req, "/static/img/favicon.svg") %>" color="#000000">
+  <link rel="apple-touch-icon" sizes="180x180" href="<%= Relative(req, "/static/img/apple-touch-icon.png") %>">
+  <link rel="icon" type="image/png" sizes="32x32" href="<%= Relative(req, "/static/img/favicon-32x32.png") %>">
+  <link rel="icon" type="image/png" sizes="16x16" href="<%= Relative(req, "/static/img/favicon-16x16.png") %>">
+
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <link href="<%= Relative(req, "/static/bootstrap.css") %>" media="screen" rel="stylesheet" type="text/css" />
+  <link href="<%= Relative(req, "/static/application.css") %>" media="screen" rel="stylesheet" type="text/css" />
+  <script type="text/javascript" src="<%= Relative(req, "/static/application.js") %>"></script>
+  <meta name="google" content="notranslate" />
+</head>
+<body class="admin d-flex flex-column" data-locale="en" data-poll-path="">
+<div id="page" class="flex-fill">
+  <div class="container-xl">
+    <div class="row">
+      <div class="col-12">
+        <% yield() %>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
+<% } %>

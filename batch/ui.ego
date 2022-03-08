@@ -1,0 +1,125 @@
+<%
+package batch
+
+import (
+"net/http"
+"fmt"
+"reflect"
+
+"github.com/fossas/faktory-plugins/ui"
+)
+
+func ego_batch(w io.Writer, req *http.Request, batch *batch) {
+  ui.Ego_layout(w, req, func() {
+    v := reflect.ValueOf(*batch.Meta)
+    typeOfS := v.Type()
+%>
+<header class="row">
+  <div class="col-5">
+    <h3>Batch <%= batch.Id %></h3>
+  </div>
+</header>
+<h4>Metadata</h4>
+<div class="table-responsive">
+  <table class="table table-striped table-bordered table-light">
+    <thead>
+    <tr>
+      <th>Property</th>
+      <th>Value</th>
+    </tr>
+    </thead>
+    <tbody>
+    <% for i := 0; i < v.NumField(); i++ { %>
+    <tr>
+      <td><%= typeOfS.Field(i).Name %></td>
+      <td><%= v.Field(i).Interface() %></td>
+    </tr>
+    <% } %>
+    </tbody>
+
+  </table>
+</div>
+<h4>Children</h4>
+<div class="table-responsive">
+  <table class="table table-striped table-bordered table-light">
+    <thead>
+    <tr>
+      <th>Batch ID</th>
+    </tr>
+    </thead>
+    <tbody>
+    <% for _, b := range batch.Children { %>
+    <tr>
+      <td><a href="<%= ui.Relative(req, b.Id) %>"><%= b.Id %></a></td>
+    </tr>
+    <% } %>
+    </tbody>
+
+  </table>
+</div>
+<h4>Parents</h4>
+<div class="table-responsive">
+  <table class="table table-striped table-bordered table-light">
+    <thead>
+    <tr>
+      <th>Batch ID</th>
+    </tr>
+    </thead>
+    <tbody>
+    <% for _, b := range batch.Parents { %>
+    <tr>
+      <td><a href="<%= ui.Relative(req, b.Id) %>"><%= b.Id %></a></td>
+    </tr>
+    <% } %>
+    </tbody>
+
+  </table>
+</div>
+<%
+})
+}
+
+func ego_batches(w io.Writer, req *http.Request, batchManager *batchManager) {
+  ui.Ego_layout(w, req, func() { %>
+
+<header class="row">
+  <div class="col-5">
+    <h3>Batches</h3>
+  </div>
+</header>
+
+<div class="table-responsive">
+  <table class="table table-striped table-bordered table-light">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Total Jobs</th>
+        <th>Succeed Jobs</th>
+        <th>Pending Jobs</th>
+        <th>Failed Jobs</th>
+        <th>Succeeded Jobs</th>
+        <th>Committed</th>
+        <th>Child Count</th>
+        <th>Parent Count</th>
+      </tr>
+    </thead>
+    <tbody>
+    <% for _, batch := range batchManager.Batches { %>
+    <tr>
+      <td><a href="<%= ui.Relative(req, fmt.Sprintf("batches/%s", batch.Id)) %>"><%= batch.Id %></a></td>
+      <td><%= batch.Meta.Total %></td>
+      <td><%= batch.Meta.Succeeded %></td>
+      <td><%= batch.Meta.Pending %></td>
+      <td><%= batch.Meta.Failed %></td>
+      <td><%= batch.Meta.Succeeded %></td>
+      <td><%= batch.Meta.Committed %></td>
+      <td><%= len(batch.Children) %></td>
+      <td><%= len(batch.Parents) %></td>
+    </tr>
+    <% } %>
+    </tbody>
+
+  </table>
+</div>
+<% }) %>
+<% } %>

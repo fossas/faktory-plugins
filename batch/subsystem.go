@@ -4,7 +4,14 @@ import (
 	"github.com/contribsys/faktory/manager"
 	"github.com/contribsys/faktory/server"
 	"github.com/contribsys/faktory/util"
+	"github.com/contribsys/faktory/webui"
+	"net/http"
+	"regexp"
 	"sync"
+)
+
+var (
+	LAST_ELEMENT = regexp.MustCompile(`/([^/]+)\z`)
 )
 
 // BatchSubsystem enables jobs to be grouped into a batch
@@ -49,6 +56,18 @@ func (b *BatchSubsystem) Start(s *server.Server) error {
 	b.addMiddleware()
 
 	b.Server.AddTask(3600, &removeStaleBatches{b})
+	var ui *webui.Lifecycle
+	for _, system := range s.Subsystems {
+		if system.Name() == "Web UI" {
+			ui = system.(*webui.Lifecycle)
+		}
+	}
+	if ui != nil {
+		ui.WebUI.App.HandleFunc("/batches/", webui.Log(ui.WebUI, b.handleBatch))
+		ui.WebUI.App.HandleFunc("/batches", webui.Log(ui.WebUI, func(w http.ResponseWriter, r *http.Request) {
+			ego_batches(w, r, b.batchManager)
+		}))
+	}
 	util.Info("Loaded batching plugin")
 	return nil
 }
@@ -99,4 +118,19 @@ func (b *BatchSubsystem) addMiddleware() {
 	b.Server.Manager().AddMiddleware("push", b.pushMiddleware)
 	b.Server.Manager().AddMiddleware("ack", b.handleJobFinished(true))
 	b.Server.Manager().AddMiddleware("fail", b.handleJobFinished(false))
+}
+
+func (b *BatchSubsystem) handleBatch(w http.ResponseWriter, r *http.Request) {
+	name := LAST_ELEMENT.FindStringSubmatch(r.URL.Path)
+	if name == nil {
+		http.Error(w, "Invalid input", http.StatusBadRequest)
+		return
+	}
+
+	batch, err := b.batchManager.getBatch(name[1])
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	ego_batch(w, r, batch)
 }
