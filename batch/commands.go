@@ -150,9 +150,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		childBatch, err := b.batchManager.getBatch(childBatchId)
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot get child batch: %v", err))
-			return
-		}
-		if err := b.batchManager.addChild(batch, childBatch); err != nil {
+		} else if err := b.batchManager.addChild(batch, childBatch); err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot add child (%s) to batch (%s): %v", childBatchId, batchId, err))
 		}
 		if opened {
