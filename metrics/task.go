@@ -24,6 +24,11 @@ func (m *metricsTask) Name() string {
 
 // Execute - runs the task to collect metrics
 func (m *metricsTask) Execute() error {
+	connectionCount := m.Subsystem.Server.Stats.Connections
+	if err := m.Subsystem.StatsDClient().Gauge(m.Subsystem.PrefixMetricName("connections.count"), float64(connectionCount), m.Subsystem.Options.Tags, 1); err != nil {
+		util.Warnf("unable to submit metric: %v", err)
+	}
+	
 	workingCount := m.Subsystem.Server.Store().Working().Size()
 	if err := m.Subsystem.StatsDClient().Gauge(m.Subsystem.PrefixMetricName("working.count"), float64(workingCount), m.Subsystem.Options.Tags, 1); err != nil {
 		util.Warnf("unable to submit metric: %v", err)

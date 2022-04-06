@@ -111,6 +111,7 @@ func TestMetrics(t *testing.T) {
 			mockDoer.EXPECT().Timing("jobs.failed.time", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(3)
 
 			// task calls
+			mockDoer.EXPECT().Gauge("jobs.connections.count", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.working.count", float64(0), gomock.Any(), gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.scheduled.count", float64(1), gomock.Any(), gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.retries.count", float64(1), gomock.Any(), gomock.Any()).Return(nil).Times(1)
