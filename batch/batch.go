@@ -287,7 +287,13 @@ func (m *batchManager) init(batch *batch) error {
 		return nil
 	}
 
-	batch.Meta.Total, err = strconv.Atoi(meta["total"])
+	var batchTotal string
+	if len(meta["total"]) > 0 {
+		batchTotal = meta["total"]
+	} else {
+		batchTotal = "0"
+	}
+	batch.Meta.Total, err = strconv.Atoi(batchTotal)
 	if err != nil {
 		return fmt.Errorf("init: total: failed converting string to int: %v", err)
 	}
