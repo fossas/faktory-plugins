@@ -36,7 +36,8 @@ func (b *BatchSubsystem) handleJobFinished(success bool) func(next func() error,
 
 				batchId, err := b.batchManager.getBatchIdFromInterface(bid)
 				if err != nil {
-					return fmt.Errorf("unable to parse batch id %s", bid)
+					util.Warnf("unable to parse batch id %s", bid)
+					return next()
 				}
 				b.batchManager.lockBatch(batchId)
 				defer b.batchManager.unlockBatch(batchId)
@@ -48,15 +49,16 @@ func (b *BatchSubsystem) handleJobFinished(success bool) func(next func() error,
 				cb, ok := ctx.Job().GetCustom("_cb")
 				if !ok {
 					util.Warnf("Batch (%s) callback job (%s) does not have _cb specified", bid, ctx.Job().Type)
-					return next()
+					return fmt.Errorf("handleJobFinished: callback job (%s) does not have _cb specified", ctx.Job().Type)
 				}
 				callbackType, ok := cb.(string)
 				if !ok {
 					util.Warnf("Error converting callback job type %s", cb)
-					return next()
+					return fmt.Errorf("handleJobFinished: invalid callback type %s", cb)
 				}
 				if err := b.batchManager.handleCallbackJobSucceeded(batch, callbackType); err != nil {
 					util.Warnf("Unable to update batch")
+					return fmt.Errorf("handleJobFinished: unable to update batch %s", batch.Id)
 				}
 				return next()
 			}
@@ -70,7 +72,8 @@ func (b *BatchSubsystem) handleJobFinished(success bool) func(next func() error,
 			defer b.batchManager.unlockBatch(batchId)
 			batch, err := b.batchManager.getBatch(batchId)
 			if err != nil {
-				return fmt.Errorf("handleJobFinished: unable to retrieve batch %s", bid)
+				util.Warnf("handleJobFinished: unable to retrieve batch %s", bid)
+				return next()
 			}
 			status := "succeeded"
 			if !success {
@@ -82,7 +85,7 @@ func (b *BatchSubsystem) handleJobFinished(success bool) func(next func() error,
 
 			if err := b.batchManager.handleJobFinished(batch, ctx.Job().Jid, success, isRetry); err != nil {
 				util.Warnf("error processing finished job for batch %v", err)
-				return fmt.Errorf("handleJobFinished: unable to process finished job %s for batch %s", ctx.Job().Jid, batch.Id)
+				return next()
 			}
 		}
 		return next()
