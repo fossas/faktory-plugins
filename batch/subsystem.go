@@ -49,7 +49,7 @@ func (b *BatchSubsystem) Start(s *server.Server) error {
 	server.CommandSet["BATCH"] = b.batchCommand
 	b.addMiddleware()
 
-	b.Server.AddTask(3600, &removeStaleBatches{b})
+	b.Server.AddTask(3600*24, &removeStaleBatches{b}) // once a day
 	util.Info("Loaded batching plugin")
 	return nil
 }
