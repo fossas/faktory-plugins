@@ -72,12 +72,23 @@ func (m *batchManager) loadExistingBatches() error {
 		return fmt.Errorf("loadExistingBatches: retrieve batches: %v", err)
 	}
 	for idx := range vals {
-		batch, err := m.newBatch(vals[idx], &batchMeta{})
-		if err != nil {
+		m.mu.Lock()
+		batch := &batch{
+			Id:       vals[idx],
+			Parents:  make([]*batch, 0),
+			Children: make([]*batch, 0),
+			Meta:     &batchMeta{},
+			mu:       sync.Mutex{},
+		}
+
+		if err := m.loadMetadata(batch); err != nil {
 			util.Warnf("loadExistingBatches: error load batch (%s) %v", vals[idx], err)
+			m.remove(batch)
+			m.mu.Unlock()
 			continue
 		}
 		m.Batches[vals[idx]] = batch
+		m.mu.Unlock()
 	}
 
 	// update parent and children
@@ -238,53 +249,10 @@ func (m *batchManager) getCompleteJobStateKey(batchId string) string {
 	return fmt.Sprintf("complete-st-%s", batchId)
 }
 
-func (m *batchManager) init(batch *batch) error {
+func (m *batchManager) loadMetadata(batch *batch) error {
 	meta, err := m.rclient.HGetAll(m.getMetaKey(batch.Id)).Result()
 	if err != nil {
 		return fmt.Errorf("init: unable to retrieve meta: %v", err)
-	}
-
-	if err := m.rclient.SAdd("batches", batch.Id).Err(); err != nil {
-		return fmt.Errorf("init: store batch: %v", err)
-	}
-
-	expiration := time.Duration(m.Subsystem.Options.UncommittedTimeoutMinutes) * time.Minute
-	if err := m.rclient.SetNX(m.getBatchKey(batch.Id), batch.Id, expiration).Err(); err != nil {
-		return fmt.Errorf("init: set expiration: %v", err)
-	}
-
-	if len(meta) == 0 {
-		// set default values
-		data := map[string]interface{}{
-			"total":        batch.Meta.Total,
-			"failed":       batch.Meta.Failed,
-			"succeeded":    batch.Meta.Succeeded,
-			"pending":      batch.Meta.Pending,
-			"created_at":   batch.Meta.CreatedAt,
-			"description":  batch.Meta.Description,
-			"committed":    batch.Meta.Committed,
-			"success_job":  batch.Meta.SuccessJob,
-			"complete_job": batch.Meta.CompleteJob,
-			"child_count":  batch.Meta.ChildCount,
-		}
-		if batch.Meta.ChildSearchDepth != nil {
-			data["child_search_depth"] = *batch.Meta.ChildSearchDepth
-		}
-		if err := m.rclient.HMSet(m.getMetaKey(batch.Id), data).Err(); err != nil {
-			return fmt.Errorf("init: could not load meta for batch: %s: %v", batch.Id, err)
-		}
-		if err := m.rclient.Expire(m.getMetaKey(batch.Id), expiration).Err(); err != nil {
-			return fmt.Errorf("init: could set expiration for batch meta: %v", err)
-		}
-
-		timeout := time.Duration(m.Subsystem.Options.CommittedTimeoutDays) * 24 * time.Hour
-		if err := m.rclient.SetNX(m.getSuccessJobStateKey(batch.Id), CallbackJobPending, timeout).Err(); err != nil {
-			return fmt.Errorf("init: could not set success_st: %v", err)
-		}
-		if err := m.rclient.SetNX(m.getCompleteJobStateKey(batch.Id), CallbackJobPending, timeout).Err(); err != nil {
-			return fmt.Errorf("init: could not set complete_st: %v", err)
-		}
-		return nil
 	}
 
 	batch.Meta.Total, err = strconv.Atoi(meta["total"])
@@ -338,6 +306,48 @@ func (m *batchManager) init(batch *batch) error {
 		return fmt.Errorf("init: get completed job state: %v", err)
 	}
 	batch.Meta.CompleteJobState = completeJobState
+
+	return nil
+}
+
+func (m *batchManager) init(batch *batch) error {
+	if err := m.rclient.SAdd("batches", batch.Id).Err(); err != nil {
+		return fmt.Errorf("init: store batch: %v", err)
+	}
+
+	expiration := time.Duration(m.Subsystem.Options.UncommittedTimeoutMinutes) * time.Minute
+	if err := m.rclient.SetNX(m.getBatchKey(batch.Id), batch.Id, expiration).Err(); err != nil {
+		return fmt.Errorf("init: set expiration: %v", err)
+	}
+
+	// set default values
+	data := map[string]interface{}{
+		"total":        batch.Meta.Total,
+		"failed":       batch.Meta.Failed,
+		"succeeded":    batch.Meta.Succeeded,
+		"pending":      batch.Meta.Pending,
+		"created_at":   batch.Meta.CreatedAt,
+		"description":  batch.Meta.Description,
+		"committed":    batch.Meta.Committed,
+		"success_job":  batch.Meta.SuccessJob,
+		"complete_job": batch.Meta.CompleteJob,
+		"child_count":  batch.Meta.ChildCount,
+	}
+	if batch.Meta.ChildSearchDepth != nil {
+		data["child_search_depth"] = *batch.Meta.ChildSearchDepth
+	}
+	if err := m.rclient.HMSet(m.getMetaKey(batch.Id), data).Err(); err != nil {
+		return fmt.Errorf("init: could not load meta for batch: %s: %v", batch.Id, err)
+	}
+	if err := m.rclient.Expire(m.getMetaKey(batch.Id), expiration).Err(); err != nil {
+		return fmt.Errorf("init: could set expiration for batch meta: %v", err)
+	}
+	if err := m.rclient.SetNX(m.getSuccessJobStateKey(batch.Id), CallbackJobPending, expiration).Err(); err != nil {
+		return fmt.Errorf("init: could not set success_st: %v", err)
+	}
+	if err := m.rclient.SetNX(m.getCompleteJobStateKey(batch.Id), CallbackJobPending, expiration).Err(); err != nil {
+		return fmt.Errorf("init: could not set complete_st: %v", err)
+	}
 
 	return nil
 }
