@@ -412,6 +412,12 @@ func (m *batchManager) remove(batch *batch) error {
 	if err := m.rclient.Del(m.getChildKey(batch.Id)).Err(); err != nil {
 		return fmt.Errorf("remove: batch children (%s), %v", batch.Id, err)
 	}
+	if err := m.rclient.Del(m.getSuccessJobStateKey(batch.Id)).Err(); err != nil {
+		return fmt.Errorf("remove: could delete expire success_st: %v", err)
+	}
+	if err := m.rclient.Del(m.getCompleteJobStateKey(batch.Id)).Err(); err != nil {
+		return fmt.Errorf("updatedCommitted: could not deletecomplete_st: %v", err)
+	}
 	return nil
 }
 
