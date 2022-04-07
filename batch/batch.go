@@ -426,26 +426,34 @@ func (m *batchManager) updateCommitted(batch *batch, committed bool) error {
 	if err := m.rclient.HSet(m.getMetaKey(batch.Id), "committed", committed).Err(); err != nil {
 		return fmt.Errorf("updateCommitted: could not update committed: %v", err)
 	}
-
+	var expiration time.Duration
 	if committed {
-		// number of days a batch can exist
-		if err := m.rclient.Expire(m.getBatchKey(batch.Id), time.Duration(m.Subsystem.Options.CommittedTimeoutDays)*time.Hour*24).Err(); err != nil {
-			return fmt.Errorf("updatedCommitted: could not not expire after committed: %v", err)
-		}
+		expiration = time.Duration(m.Subsystem.Options.CommittedTimeoutDays) * time.Hour * 24
 	} else {
-		if err := m.rclient.Expire(m.getBatchKey(batch.Id), time.Duration(m.Subsystem.Options.UncommittedTimeoutMinutes)*time.Minute).Err(); err != nil {
-			return fmt.Errorf("updatedCommitted: could not expire: %v", err)
-		}
+		expiration = time.Duration(m.Subsystem.Options.UncommittedTimeoutMinutes) * time.Minute
 	}
+	if err := m.rclient.Expire(m.getBatchKey(batch.Id), expiration).Err(); err != nil {
+		return fmt.Errorf("updatedCommitted: could not set expire for batch: %v", err)
+	}
+	if err := m.rclient.Expire(m.getMetaKey(batch.Id), expiration).Err(); err != nil {
+		return fmt.Errorf("updatedCommitted: could not set expire for batch meta: %v", err)
+	}
+	if err := m.rclient.Expire(m.getSuccessJobStateKey(batch.Id), expiration).Err(); err != nil {
+		return fmt.Errorf("updatedCommitted: could not set expire success_st: %v", err)
+	}
+	if err := m.rclient.Expire(m.getCompleteJobStateKey(batch.Id), expiration).Err(); err != nil {
+		return fmt.Errorf("updatedCommitted: could not set expire for complete_st: %v", err)
+	}
+
 	return nil
 }
 
 func (m *batchManager) updateJobCallbackState(batch *batch, callbackType string, state string) error {
 	// locking must be handled outside of call
-	timeout := time.Duration(m.Subsystem.Options.CommittedTimeoutDays) * 24 * time.Hour
+	expire := time.Duration(m.Subsystem.Options.CommittedTimeoutDays) * 24 * time.Hour
 	if callbackType == "success" {
 		batch.Meta.SuccessJobState = state
-		if err := m.rclient.Set(m.getSuccessJobStateKey(batch.Id), state, timeout).Err(); err != nil {
+		if err := m.rclient.Set(m.getSuccessJobStateKey(batch.Id), state, expire).Err(); err != nil {
 			return fmt.Errorf("updateJobCallbackState: could not set success_st: %v", err)
 		}
 		if state == CallbackJobSucceeded {
@@ -453,7 +461,7 @@ func (m *batchManager) updateJobCallbackState(batch *batch, callbackType string,
 		}
 	} else {
 		batch.Meta.CompleteJobState = state
-		if err := m.rclient.Set(m.getCompleteJobStateKey(batch.Id), state, timeout).Err(); err != nil {
+		if err := m.rclient.Set(m.getCompleteJobStateKey(batch.Id), state, expire).Err(); err != nil {
 			return fmt.Errorf("updateJobCallbackState: could not set completed_st: %v", err)
 		}
 		if _, areChildrenSucceeded := m.areChildrenFinished(batch); areChildrenSucceeded && batch.Meta.SuccessJob == "" && state == CallbackJobSucceeded {
