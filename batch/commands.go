@@ -140,29 +140,35 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		}
 		opened := false
 		if batch.Meta.Committed {
+			// open will check if the batch has already finished
 			if err := b.batchManager.open(batch); err != nil {
 				_ = c.Error(cmd, errors.New("cannot open committed batch"))
+				return
 			}
 			opened = true
 		}
-		if b.batchManager.areBatchJobsCompleted(batch) {
-			_ = c.Error(cmd, errors.New("batch has already finished"))
-			return
-		}
+
 		b.batchManager.lockBatch(childBatchId)
 		defer b.batchManager.unlockBatch(childBatchId)
 		childBatch, err := b.batchManager.getBatch(childBatchId)
+		ok := true
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot get child batch: %v", err))
+			ok = false
 		} else if err := b.batchManager.addChild(batch, childBatch); err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot add child (%s) to batch (%s): %v", childBatchId, batchId, err))
+			ok = false
 		}
+		// ensure batch is committed if it was opened
 		if opened {
 			if err := b.batchManager.commit(batch); err != nil {
 				_ = c.Error(cmd, errors.New("cannot commit batch"))
+				return
 			}
 		}
-		_ = c.Ok()
+		if ok {
+			_ = c.Ok()
+		}
 		return
 	case "STATUS":
 		batchId := parts[1]
