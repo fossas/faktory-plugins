@@ -147,7 +147,7 @@ func (m *batchManager) getBatch(batchId string) (*batch, error) {
 	}
 	if exists == 0 {
 		m.removeBatch(b)
-		return nil, fmt.Errorf("getBatch: batch was not committed within 2 hours")
+		return nil, fmt.Errorf("getBatch: batch has timed out")
 	}
 
 	return b, nil
