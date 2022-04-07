@@ -549,8 +549,8 @@ func (m *batchManager) handleBatchJobsCompleted(batch *batch, parentsVisited map
 			// parent has already been notified
 			continue
 		}
-		m.lockBatch(parent.Id)
 		parentsVisited[parent.Id] = true
+		m.lockBatch(parent.Id)
 		m.handleChildComplete(parent, batch, areChildrenFinished, areChildrenSucceeded, parentsVisited)
 		m.unlockBatch(parent.Id)
 	}
