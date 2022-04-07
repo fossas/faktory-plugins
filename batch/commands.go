@@ -76,8 +76,8 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 	case "OPEN":
 		batchId := parts[1]
 
-		b.batchManager.lockBatch(batchId)
-		defer b.batchManager.unlockBatch(batchId)
+		b.batchManager.lockBatchIfExists(batchId)
+		defer b.batchManager.unlockBatchIfExists(batchId)
 		batch, err := b.batchManager.getBatch(batchId)
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot get batch: %v", err))
@@ -104,8 +104,8 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			_ = c.Error(cmd, errors.New("bid is required"))
 			return
 		}
-		b.batchManager.lockBatch(batchId)
-		defer b.batchManager.unlockBatch(batchId)
+		b.batchManager.lockBatchIfExists(batchId)
+		defer b.batchManager.unlockBatchIfExists(batchId)
 		batch, err := b.batchManager.getBatch(batchId)
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot get batch: %v", err))
@@ -131,8 +131,8 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			_ = c.Error(cmd, fmt.Errorf("child batch and parent batch cannot be the same value"))
 			return
 		}
-		b.batchManager.lockBatch(batchId)
-		defer b.batchManager.unlockBatch(batchId)
+		b.batchManager.lockBatchIfExists(batchId)
+		defer b.batchManager.unlockBatchIfExists(batchId)
 		batch, err := b.batchManager.getBatch(batchId)
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot get batch: %v", err))
@@ -148,8 +148,8 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			opened = true
 		}
 
-		b.batchManager.lockBatch(childBatchId)
-		defer b.batchManager.unlockBatch(childBatchId)
+		b.batchManager.lockBatchIfExists(childBatchId)
+		defer b.batchManager.unlockBatchIfExists(childBatchId)
 		childBatch, err := b.batchManager.getBatch(childBatchId)
 		ok := true
 		if err != nil {
@@ -172,8 +172,8 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		return
 	case "STATUS":
 		batchId := parts[1]
-		b.batchManager.lockBatch(batchId)
-		defer b.batchManager.unlockBatch(batchId)
+		b.batchManager.lockBatchIfExists(batchId)
+		defer b.batchManager.unlockBatchIfExists(batchId)
 		batch, err := b.batchManager.getBatch(batchId)
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot find batch: %v", err))

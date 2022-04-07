@@ -13,8 +13,8 @@ func (b *BatchSubsystem) pushMiddleware(next func() error, ctx manager.Context) 
 		if err != nil {
 			return fmt.Errorf("pushMiddleware: unable to parse batch id %s", bid)
 		}
-		b.batchManager.lockBatch(batchId)
-		defer b.batchManager.unlockBatch(batchId)
+		b.batchManager.lockBatchIfExists(batchId)
+		defer b.batchManager.unlockBatchIfExists(batchId)
 		batch, err := b.batchManager.getBatch(batchId)
 		if err != nil {
 			return fmt.Errorf("pushMiddleware: unable to retrieve batch %s", bid)
@@ -39,8 +39,8 @@ func (b *BatchSubsystem) handleJobFinished(success bool) func(next func() error,
 					util.Warnf("unable to parse batch id %s", bid)
 					return next()
 				}
-				b.batchManager.lockBatch(batchId)
-				defer b.batchManager.unlockBatch(batchId)
+				b.batchManager.lockBatchIfExists(batchId)
+				defer b.batchManager.unlockBatchIfExists(batchId)
 				batch, err := b.batchManager.getBatch(batchId)
 				if err != nil {
 					util.Warnf("unable to retrieve batch %s: %v", bid, err)
@@ -68,8 +68,8 @@ func (b *BatchSubsystem) handleJobFinished(success bool) func(next func() error,
 			if err != nil {
 				return fmt.Errorf("handleJobFinished: unable to parse batch id %s", bid)
 			}
-			b.batchManager.lockBatch(batchId)
-			defer b.batchManager.unlockBatch(batchId)
+			b.batchManager.lockBatchIfExists(batchId)
+			defer b.batchManager.unlockBatchIfExists(batchId)
 			batch, err := b.batchManager.getBatch(batchId)
 			if err != nil {
 				util.Warnf("handleJobFinished: unable to retrieve batch %s", bid)

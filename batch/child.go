@@ -35,7 +35,7 @@ func (m *batchManager) addChild(batch *batch, childBatch *batch) error {
 		return fmt.Errorf("addChild: erorr adding parent batch (%s) to child (%s): %v", batch.Id, childBatch.Id, err)
 	}
 	if m.areBatchJobsCompleted(batch) {
-		m.handleBatchJobsCompleted(batch, map[string]bool{batch.Id: true})
+		m.handleBatchJobsCompleted(batch, map[string]bool{batch.Id: true, childBatch.Id: true})
 	}
 	return nil
 }

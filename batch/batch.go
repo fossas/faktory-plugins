@@ -82,6 +82,7 @@ func (m *batchManager) loadExistingBatches() error {
 			continue
 		}
 		m.Batches[vals[idx]] = batch
+		m.batchMu[vals[idx]] = &sync.Mutex{}
 		m.mu.Unlock()
 	}
 
@@ -121,26 +122,26 @@ func (m *batchManager) loadExistingBatches() error {
 	return nil
 }
 
-func (m *batchManager) lockBatch(batchId string) {
+func (m *batchManager) lockBatchIfExists(batchId string) {
 	m.mu.Lock()
-	if _, ok := m.batchMu[batchId]; !ok {
-		m.batchMu[batchId] = &sync.Mutex{}
+	if _, ok := m.Batches[batchId]; !ok {
+		m.mu.Unlock()
+		return
 	}
+	lock := m.batchMu[batchId]
 	m.mu.Unlock()
-	m.batchMu[batchId].Lock()
+	lock.Lock()
 }
 
-func (m *batchManager) unlockBatch(batchId string) {
+func (m *batchManager) unlockBatchIfExists(batchId string) {
 	m.mu.Lock()
-	_, ok := m.Batches[batchId]
-	if !ok {
-		// batch was deleted so we can remove the reference
-		delete(m.batchMu, batchId)
+	if _, ok := m.Batches[batchId]; !ok {
+		m.mu.Unlock()
+		return
 	}
+	lock := m.batchMu[batchId]
 	m.mu.Unlock()
-	if ok {
-		m.batchMu[batchId].Unlock()
-	}
+	lock.Unlock()
 }
 
 func (m *batchManager) getBatch(batchId string) (*batch, error) {
@@ -175,6 +176,7 @@ func (m *batchManager) removeBatch(batch *batch) {
 		util.Warnf("removeBatch: unable to remove batch: %v", err)
 	}
 	delete(m.Batches, batch.Id)
+	delete(m.batchMu, batch.Id)
 
 	batch = nil
 }
@@ -203,11 +205,11 @@ func (m *batchManager) removeStaleBatches() {
 
 		if remove {
 			count++
-			m.lockBatch(b.Id)
+			m.lockBatchIfExists(b.Id)
 			m.mu.Lock() // this lock must be after locking the batch
 			m.removeBatch(b)
 			m.mu.Unlock()
-			m.unlockBatch(b.Id)
+			m.unlockBatchIfExists(b.Id)
 		}
 	}
 	util.Infof("Removed: %d stale batches", count)
@@ -244,6 +246,7 @@ func (m *batchManager) newBatch(batchId string, meta *batchMeta) (*batch, error)
 	}
 
 	m.Batches[batchId] = b
+	m.batchMu[batchId] = &sync.Mutex{}
 
 	return b, nil
 }
@@ -549,10 +552,10 @@ func (m *batchManager) handleBatchJobsCompleted(batch *batch, parentsVisited map
 			// parent has already been notified
 			continue
 		}
+		m.lockBatchIfExists(parent.Id)
 		parentsVisited[parent.Id] = true
-		m.lockBatch(parent.Id)
 		m.handleChildComplete(parent, batch, areChildrenFinished, areChildrenSucceeded, parentsVisited)
-		m.unlockBatch(parent.Id)
+		m.unlockBatchIfExists(parent.Id)
 	}
 }
 
