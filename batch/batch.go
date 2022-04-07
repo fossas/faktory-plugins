@@ -117,24 +117,30 @@ func (m *batchManager) loadExistingBatches() error {
 			m.handleBatchJobsCompleted(b, map[string]bool{b.Id: true})
 		}
 	}
-
+	util.Infof("Loaded %d batches", len(m.Batches))
 	return nil
 }
 
 func (m *batchManager) lockBatch(batchId string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if _, ok := m.batchMu[batchId]; !ok {
 		m.batchMu[batchId] = &sync.Mutex{}
 	}
+	m.mu.Unlock()
 	m.batchMu[batchId].Lock()
 }
 
 func (m *batchManager) unlockBatch(batchId string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	defer m.batchMu[batchId].Unlock()
-	delete(m.batchMu, batchId)
+	_, ok := m.Batches[batchId]
+	if !ok {
+		// batch was deleted so we can remove the reference
+		delete(m.batchMu, batchId)
+	}
+	m.mu.Unlock()
+	if ok {
+		m.batchMu[batchId].Unlock()
+	}
 }
 
 func (m *batchManager) getBatch(batchId string) (*batch, error) {
