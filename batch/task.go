@@ -17,7 +17,7 @@ func (t *removeStaleBatches) Name() string {
 
 // Execute - runs the task to collect metrics
 func (t *removeStaleBatches) Execute() error {
-	t.Subsystem.batchManager.removeStaleBatches()
+	go t.Subsystem.batchManager.removeStaleBatches()
 	return nil
 }
 
