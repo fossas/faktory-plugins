@@ -40,7 +40,7 @@ type batchManager struct {
 	Batches   map[string]*batch
 	Subsystem *BatchSubsystem
 	rclient   *redis.Client
-	mu        sync.Mutex
+	mu        sync.Mutex // this lock is only used for to lock access to Batches
 	batchMu   map[string]*sync.Mutex
 }
 
@@ -139,15 +139,14 @@ func (m *batchManager) unlockBatch(batchId string) {
 
 func (m *batchManager) getBatch(batchId string) (*batch, error) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if batchId == "" {
-		m.mu.Unlock()
 		return nil, fmt.Errorf("getBatch: batchId cannot be blank")
 	}
 
 	b, ok := m.Batches[batchId]
 
 	if !ok {
-		m.mu.Unlock()
 		return nil, fmt.Errorf("getBatch: no batch found")
 	}
 
@@ -158,17 +157,14 @@ func (m *batchManager) getBatch(batchId string) (*batch, error) {
 		return nil, fmt.Errorf("getBatch: unable to check if batch has timed out")
 	}
 	if exists == 0 {
-		m.mu.Unlock()
 		m.removeBatch(b)
 		return nil, fmt.Errorf("getBatch: batch has timed out")
 	}
-	m.mu.Unlock()
 	return b, nil
 }
 
 func (m *batchManager) removeBatch(batch *batch) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	// locking must be handled outside the function
 	if err := m.remove(batch); err != nil {
 		util.Warnf("removeBatch: unable to remove batch: %v", err)
 	}
@@ -178,6 +174,9 @@ func (m *batchManager) removeBatch(batch *batch) {
 }
 
 func (m *batchManager) removeStaleBatches() {
+	util.Infof("checking for stale batches")
+
+	count := 0
 	for _, b := range m.Batches {
 		remove := false
 		if b.Meta.CreatedAt != "" {
@@ -197,12 +196,15 @@ func (m *batchManager) removeStaleBatches() {
 		}
 
 		if remove {
-			util.Debugf("Removing stale batch %s", b.Id)
+			count++
 			m.lockBatch(b.Id)
+			m.mu.Lock() // this lock must be after locking the batch
 			m.removeBatch(b)
+			m.mu.Unlock()
 			m.unlockBatch(b.Id)
 		}
 	}
+	util.Infof("Removed: %d stale batches", count)
 }
 
 func (m *batchManager) newBatchMeta(description string, success string, complete string, childSearchDepth *int) *batchMeta {
@@ -469,7 +471,9 @@ func (m *batchManager) updateJobCallbackState(batch *batch, callbackType string,
 			return fmt.Errorf("updateJobCallbackState: could not set success_st: %v", err)
 		}
 		if state == CallbackJobSucceeded {
+			m.mu.Lock()
 			m.removeBatch(batch)
+			m.mu.Unlock()
 		}
 	} else {
 		batch.Meta.CompleteJobState = state
@@ -477,7 +481,9 @@ func (m *batchManager) updateJobCallbackState(batch *batch, callbackType string,
 			return fmt.Errorf("updateJobCallbackState: could not set completed_st: %v", err)
 		}
 		if _, areChildrenSucceeded := m.areChildrenFinished(batch); areChildrenSucceeded && batch.Meta.SuccessJob == "" && state == CallbackJobSucceeded {
+			m.mu.Lock()
 			m.removeBatch(batch)
+			m.mu.Unlock()
 		}
 	}
 	return nil
