@@ -18,7 +18,6 @@ type batch struct {
 	Meta     *batchMeta
 	Parents  []*batch
 	Children []*batch
-	mu       sync.Mutex
 }
 
 type batchMeta struct {
@@ -41,7 +40,8 @@ type batchManager struct {
 	Batches   map[string]*batch
 	Subsystem *BatchSubsystem
 	rclient   *redis.Client
-	mu        sync.RWMutex
+	mu        sync.Mutex
+	batchMu   map[string]*sync.Mutex
 }
 
 const (
@@ -53,17 +53,12 @@ const (
 	CallbackJobSucceeded = "2"
 )
 
-func (m *batchManager) getBatchFromInterface(batchId interface{}) (*batch, error) {
+func (m *batchManager) getBatchIdFromInterface(batchId interface{}) (string, error) {
 	bid, ok := batchId.(string)
 	if !ok {
-		return nil, errors.New("getBatchFromInterface: invalid custom bid value")
+		return "", errors.New("getBatchIdFromInterface: invalid custom bid value")
 	}
-	batch, err := m.getBatch(bid)
-	if err != nil {
-		util.Warnf("getBatchFromInterface: Unable to retrieve batch: %v", err)
-		return nil, fmt.Errorf("getBatchFromInterface: unable to get batch: %s", bid)
-	}
-	return batch, nil
+	return bid, nil
 }
 
 func (m *batchManager) loadExistingBatches() error {
@@ -78,7 +73,6 @@ func (m *batchManager) loadExistingBatches() error {
 			Parents:  make([]*batch, 0),
 			Children: make([]*batch, 0),
 			Meta:     &batchMeta{},
-			mu:       sync.Mutex{},
 		}
 
 		if err := m.loadMetadata(batch); err != nil {
@@ -127,41 +121,60 @@ func (m *batchManager) loadExistingBatches() error {
 	return nil
 }
 
+func (m *batchManager) lockBatch(batchId string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.batchMu[batchId]; !ok {
+		m.batchMu[batchId] = &sync.Mutex{}
+	}
+	m.batchMu[batchId].Lock()
+}
+
+func (m *batchManager) unlockBatch(batchId string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	defer m.batchMu[batchId].Unlock()
+	delete(m.batchMu, batchId)
+}
+
 func (m *batchManager) getBatch(batchId string) (*batch, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
 	if batchId == "" {
+		m.mu.Unlock()
 		return nil, fmt.Errorf("getBatch: batchId cannot be blank")
 	}
 
 	b, ok := m.Batches[batchId]
 
 	if !ok {
+		m.mu.Unlock()
 		return nil, fmt.Errorf("getBatch: no batch found")
 	}
 
 	exists, err := m.rclient.Exists(m.getBatchKey(b.Id)).Result()
 	if err != nil {
 		util.Warnf("Cannot confirm batch exists: %v", err)
+		m.mu.Unlock()
 		return nil, fmt.Errorf("getBatch: unable to check if batch has timed out")
 	}
 	if exists == 0 {
+		m.mu.Unlock()
 		m.removeBatch(b)
 		return nil, fmt.Errorf("getBatch: batch has timed out")
 	}
-
+	m.mu.Unlock()
 	return b, nil
 }
 
 func (m *batchManager) removeBatch(batch *batch) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if err := m.remove(batch); err != nil {
 		util.Warnf("removeBatch: unable to remove batch: %v", err)
 	}
 	delete(m.Batches, batch.Id)
 
 	batch = nil
-	m.mu.Unlock()
 }
 
 func (m *batchManager) removeStaleBatches() {
@@ -185,9 +198,9 @@ func (m *batchManager) removeStaleBatches() {
 
 		if remove {
 			util.Debugf("Removing stale batch %s", b.Id)
-			b.mu.Lock()
+			m.lockBatch(b.Id)
 			m.removeBatch(b)
-			b.mu.Unlock()
+			m.unlockBatch(b.Id)
 		}
 	}
 }
@@ -217,7 +230,6 @@ func (m *batchManager) newBatch(batchId string, meta *batchMeta) (*batch, error)
 		Parents:  make([]*batch, 0),
 		Children: make([]*batch, 0),
 		Meta:     meta,
-		mu:       sync.Mutex{},
 	}
 	if err := m.init(b); err != nil {
 		return nil, fmt.Errorf("newBatch: %v", err)
@@ -525,10 +537,10 @@ func (m *batchManager) handleBatchJobsCompleted(batch *batch, parentsVisited map
 			// parent has already been notified
 			continue
 		}
-		parent.mu.Lock()
+		m.lockBatch(parent.Id)
 		parentsVisited[parent.Id] = true
 		m.handleChildComplete(parent, batch, areChildrenFinished, areChildrenSucceeded, parentsVisited)
-		parent.mu.Unlock()
+		m.unlockBatch(parent.Id)
 	}
 }
 

@@ -37,9 +37,10 @@ func (b *BatchSubsystem) Start(s *server.Server) error {
 	b.Server = s
 	b.batchManager = &batchManager{
 		Batches:   make(map[string]*batch),
-		mu:        sync.RWMutex{},
+		mu:        sync.Mutex{},
 		rclient:   b.Server.Manager().Redis(),
 		Subsystem: b,
+		batchMu:   make(map[string]*sync.Mutex),
 	}
 	b.Fetcher = manager.BasicFetcher(s.Manager().Redis())
 	if err := b.batchManager.loadExistingBatches(); err != nil {

@@ -76,13 +76,13 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 	case "OPEN":
 		batchId := parts[1]
 
+		b.batchManager.lockBatch(batchId)
+		defer b.batchManager.unlockBatch(batchId)
 		batch, err := b.batchManager.getBatch(batchId)
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot get batch: %v", err))
 			return
 		}
-		batch.mu.Lock()
-		defer batch.mu.Unlock()
 
 		if b.batchManager.areBatchJobsCompleted(batch) {
 			_ = c.Error(cmd, errors.New("batch has already finished"))
@@ -104,13 +104,13 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			_ = c.Error(cmd, errors.New("bid is required"))
 			return
 		}
+		b.batchManager.lockBatch(batchId)
+		defer b.batchManager.unlockBatch(batchId)
 		batch, err := b.batchManager.getBatch(batchId)
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot get batch: %v", err))
 			return
 		}
-		batch.mu.Lock()
-		defer batch.mu.Unlock()
 
 		if err := b.batchManager.commit(batch); err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot commit batch: %v", err))
@@ -127,14 +127,17 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		}
 		batchId := subParts[0]
 		childBatchId := subParts[1]
-
+		if childBatchId == batchId {
+			_ = c.Error(cmd, fmt.Errorf("child batch and parent batch cannot be the same value"))
+			return
+		}
+		b.batchManager.lockBatch(batchId)
+		defer b.batchManager.unlockBatch(batchId)
 		batch, err := b.batchManager.getBatch(batchId)
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot get batch: %v", err))
 			return
 		}
-		batch.mu.Lock()
-		defer batch.mu.Unlock()
 		opened := false
 		if batch.Meta.Committed {
 			if err := b.batchManager.open(batch); err != nil {
@@ -146,7 +149,8 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			_ = c.Error(cmd, errors.New("batch has already finished"))
 			return
 		}
-
+		b.batchManager.lockBatch(childBatchId)
+		defer b.batchManager.unlockBatch(childBatchId)
 		childBatch, err := b.batchManager.getBatch(childBatchId)
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot get child batch: %v", err))
@@ -162,6 +166,8 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		return
 	case "STATUS":
 		batchId := parts[1]
+		b.batchManager.lockBatch(batchId)
+		defer b.batchManager.unlockBatch(batchId)
 		batch, err := b.batchManager.getBatch(batchId)
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot find batch: %v", err))

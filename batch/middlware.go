@@ -9,12 +9,16 @@ import (
 
 func (b *BatchSubsystem) pushMiddleware(next func() error, ctx manager.Context) error {
 	if bid, ok := ctx.Job().GetCustom("bid"); ok {
-		batch, err := b.batchManager.getBatchFromInterface(bid)
+		batchId, err := b.batchManager.getBatchIdFromInterface(bid)
 		if err != nil {
-			return fmt.Errorf("pushMiddleware: unable to get batch %s", bid)
+			return fmt.Errorf("pushMiddleware: unable to parse batch id %s", bid)
 		}
-		batch.mu.Lock()
-		defer batch.mu.Unlock()
+		b.batchManager.lockBatch(batchId)
+		defer b.batchManager.unlockBatch(batchId)
+		batch, err := b.batchManager.getBatch(batchId)
+		if err != nil {
+			return fmt.Errorf("pushMiddleware: unable to retrieve batch %s", bid)
+		}
 		if err := b.batchManager.handleJobQueued(batch); err != nil {
 			util.Warnf("unable to add batch %v", err)
 			return fmt.Errorf("pushMiddleware: Unable to add job %s to batch %s", ctx.Job().Jid, bid)
@@ -29,13 +33,18 @@ func (b *BatchSubsystem) handleJobFinished(success bool) func(next func() error,
 		if success {
 			// check if this is a success / complete job from batch
 			if bid, ok := ctx.Job().GetCustom("_bid"); ok {
-				batch, err := b.batchManager.getBatchFromInterface(bid)
+
+				batchId, err := b.batchManager.getBatchIdFromInterface(bid)
 				if err != nil {
-					util.Warnf("Unable to retrieve batch %s: %v", bid, err)
+					return fmt.Errorf("unable to parse batch id %s", bid)
+				}
+				b.batchManager.lockBatch(batchId)
+				defer b.batchManager.unlockBatch(batchId)
+				batch, err := b.batchManager.getBatch(batchId)
+				if err != nil {
+					util.Warnf("unable to retrieve batch %s: %v", bid, err)
 					return next()
 				}
-				batch.mu.Lock()
-				defer batch.mu.Unlock()
 				cb, ok := ctx.Job().GetCustom("_cb")
 				if !ok {
 					util.Warnf("Batch (%s) callback job (%s) does not have _cb specified", bid, ctx.Job().Type)
@@ -53,12 +62,16 @@ func (b *BatchSubsystem) handleJobFinished(success bool) func(next func() error,
 			}
 		}
 		if bid, ok := ctx.Job().GetCustom("bid"); ok {
-			batch, err := b.batchManager.getBatchFromInterface(bid)
+			batchId, err := b.batchManager.getBatchIdFromInterface(bid)
+			if err != nil {
+				return fmt.Errorf("handleJobFinished: unable to parse batch id %s", bid)
+			}
+			b.batchManager.lockBatch(batchId)
+			defer b.batchManager.unlockBatch(batchId)
+			batch, err := b.batchManager.getBatch(batchId)
 			if err != nil {
 				return fmt.Errorf("handleJobFinished: unable to retrieve batch %s", bid)
 			}
-			batch.mu.Lock()
-			defer batch.mu.Unlock()
 			status := "succeeded"
 			if !success {
 				status = "failed"
