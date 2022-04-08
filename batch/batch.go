@@ -160,7 +160,6 @@ func (m *batchManager) getBatch(batchId string) (*batch, error) {
 	exists, err := m.rclient.Exists(m.getBatchKey(b.Id)).Result()
 	if err != nil {
 		util.Warnf("Cannot confirm batch exists: %v", err)
-		m.mu.Unlock()
 		return nil, fmt.Errorf("getBatch: unable to check if batch has timed out")
 	}
 	if exists == 0 {
