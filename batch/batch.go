@@ -162,9 +162,16 @@ func (m *batchManager) removeBatch(batch *batch) {
 }
 
 func (m *batchManager) removeStaleBatches() {
+	// in order to avoid dead locks
+	// Step 1 create a list of batches to delete
+	// Step 2 take a lock on each batch
+	//   - this ensures we wait for any operations on a batch to finish
+	// Step 3 lock access to any batch
+	//   - this way no other locks can be taken
+	// Step 4 delete batches
 	util.Infof("checking for stale batches")
-
-	count := 0
+	var batchesToRemove []string
+	// Step 1
 	for _, b := range m.Batches {
 		remove := false
 		if b.Meta.CreatedAt != "" {
@@ -184,16 +191,33 @@ func (m *batchManager) removeStaleBatches() {
 		}
 
 		if remove {
-			count++
-			func() {
-				m.lockBatchIfExists(b.Id)
-				m.mu.Lock() // this lock must be after locking the batch
-				defer m.mu.Unlock()
-				m.removeBatch(b)
-			}()
+			batchesToRemove = append(batchesToRemove, b.Id)
 		}
 	}
-	util.Infof("Removed: %d stale batches", count)
+	// Step 2 - lock each batch
+	for _, batchId := range batchesToRemove {
+		b, ok := m.Batches[batchId]
+		if !ok {
+			continue
+		}
+		b.mu.Lock()
+	}
+	// Step 3 - lock access to all batches
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Step 4 - delete batches and unlock (in case another goroutines is waiting on a lock)
+	for _, batchId := range batchesToRemove {
+		func() {
+			b, ok := m.Batches[batchId]
+			defer b.mu.Unlock()
+			if !ok {
+				return
+			}
+			m.removeBatch(b)
+		}()
+	}
+	util.Infof("Removed: %d stale batches", len(batchesToRemove))
 }
 
 func (m *batchManager) newBatchMeta(description string, success string, complete string, childSearchDepth *int) *batchMeta {
