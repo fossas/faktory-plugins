@@ -108,22 +108,24 @@ func (m *batchManager) loadExistingBatches() error {
 
 func (m *batchManager) lockBatchIfExists(batchId string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	batchToLock, ok := m.Batches[batchId]
 	if !ok {
+		m.mu.Unlock()
 		return
 	}
-	defer batchToLock.mu.Lock()
+	m.mu.Unlock()
+	batchToLock.mu.Lock()
 }
 
 func (m *batchManager) unlockBatchIfExists(batchId string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	batchToUnlock, ok := m.Batches[batchId]
+	batchToLock, ok := m.Batches[batchId];
 	if !ok {
+		m.mu.Unlock()
 		return
 	}
-	defer batchToUnlock.mu.Unlock()
+	m.mu.Unlock()
+	batchToLock.mu.Unlock()
 }
 
 func (m *batchManager) getBatch(batchId string) (*batch, error) {
@@ -196,11 +198,9 @@ func (m *batchManager) removeStaleBatches() {
 	}
 	// Step 2 - lock each batch
 	for _, batchId := range batchesToRemove {
-		b, ok := m.Batches[batchId]
-		if !ok {
-			continue
+		if b, ok := m.Batches[batchId]; ok {
+			b.mu.Lock()
 		}
-		b.mu.Lock()
 	}
 	// Step 3 - lock access to all batches
 	m.mu.Lock()
@@ -209,12 +209,10 @@ func (m *batchManager) removeStaleBatches() {
 	// Step 4 - delete batches and unlock (in case another goroutines is waiting on a lock)
 	for _, batchId := range batchesToRemove {
 		func() {
-			b, ok := m.Batches[batchId]
-			defer b.mu.Unlock()
-			if !ok {
-				return
+			if b, ok := m.Batches[batchId]; ok {
+				defer b.mu.Unlock()
+				m.removeBatch(b)
 			}
-			m.removeBatch(b)
 		}()
 	}
 	util.Infof("Removed: %d stale batches", len(batchesToRemove))
@@ -504,9 +502,11 @@ func (m *batchManager) updateJobCallbackState(batch *batch, callbackType string,
 			return fmt.Errorf("updateJobCallbackState: could not set success_st: %v", err)
 		}
 		if state == CallbackJobSucceeded {
-			m.mu.Lock()
-			defer m.mu.Unlock()
-			m.removeBatch(batch)
+			go func() {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+				m.removeBatch(batch)
+			}()
 		}
 	} else {
 		batch.Meta.CompleteJobState = state
@@ -514,9 +514,11 @@ func (m *batchManager) updateJobCallbackState(batch *batch, callbackType string,
 			return fmt.Errorf("updateJobCallbackState: could not set completed_st: %v", err)
 		}
 		if _, areChildrenSucceeded := m.areChildrenFinished(batch); areChildrenSucceeded && batch.Meta.SuccessJob == "" && state == CallbackJobSucceeded {
-			m.mu.Lock()
-			defer m.mu.Unlock()
-			m.removeBatch(batch)
+			go func() {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+				m.removeBatch(batch)
+			}()
 		}
 	}
 	return nil
