@@ -67,23 +67,7 @@ func (m *batchManager) loadExistingBatches() error {
 		return fmt.Errorf("loadExistingBatches: retrieve batches: %v", err)
 	}
 	for idx := range vals {
-		m.mu.Lock()
-		batch := &batch{
-			Id:       vals[idx],
-			Parents:  make([]*batch, 0),
-			Children: make([]*batch, 0),
-			Meta:     &batchMeta{},
-			mu:       sync.Mutex{},
-		}
-
-		if err := m.loadMetadata(batch); err != nil {
-			util.Warnf("loadExistingBatches: error load batch (%s) %v", vals[idx], err)
-			m.remove(batch)
-			m.mu.Unlock()
-			continue
-		}
-		m.Batches[vals[idx]] = batch
-		m.mu.Unlock()
+		m.loadBatch(vals[idx])
 	}
 
 	// update parent and children
@@ -124,24 +108,22 @@ func (m *batchManager) loadExistingBatches() error {
 
 func (m *batchManager) lockBatchIfExists(batchId string) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	batchToLock, ok := m.Batches[batchId]
 	if !ok {
-		m.mu.Unlock()
 		return
 	}
-	m.mu.Unlock()
-	batchToLock.mu.Lock()
+	defer batchToLock.mu.Lock()
 }
 
 func (m *batchManager) unlockBatchIfExists(batchId string) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	batchToUnlock, ok := m.Batches[batchId]
 	if !ok {
-		m.mu.Unlock()
 		return
 	}
-	m.mu.Unlock()
-	batchToUnlock.mu.Unlock()
+	defer batchToUnlock.mu.Unlock()
 }
 
 func (m *batchManager) getBatch(batchId string) (*batch, error) {
@@ -203,11 +185,12 @@ func (m *batchManager) removeStaleBatches() {
 
 		if remove {
 			count++
-			m.lockBatchIfExists(b.Id)
-			m.mu.Lock() // this lock must be after locking the batch
-			m.removeBatch(b)
-			m.mu.Unlock()
-			m.unlockBatchIfExists(b.Id)
+			func() {
+				m.lockBatchIfExists(b.Id)
+				m.mu.Lock() // this lock must be after locking the batch
+				defer m.mu.Unlock()
+				m.removeBatch(b)
+			}()
 		}
 	}
 	util.Infof("Removed: %d stale batches", count)
@@ -228,6 +211,25 @@ func (m *batchManager) newBatchMeta(description string, success string, complete
 		ChildSearchDepth: childSearchDepth,
 		ChildCount:       0,
 	}
+}
+
+func (m *batchManager) loadBatch(batchId string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	batch := &batch{
+		Id:       batchId,
+		Parents:  make([]*batch, 0),
+		Children: make([]*batch, 0),
+		Meta:     &batchMeta{},
+		mu:       sync.Mutex{},
+	}
+
+	if err := m.loadMetadata(batch); err != nil {
+		util.Warnf("loadExistingBatches: error load batch (%s) %v", batchId, err)
+		m.remove(batch)
+		return
+	}
+	m.Batches[batchId] = batch
 }
 
 func (m *batchManager) newBatch(batchId string, meta *batchMeta) (*batch, error) {
@@ -479,8 +481,8 @@ func (m *batchManager) updateJobCallbackState(batch *batch, callbackType string,
 		}
 		if state == CallbackJobSucceeded {
 			m.mu.Lock()
+			defer m.mu.Unlock()
 			m.removeBatch(batch)
-			m.mu.Unlock()
 		}
 	} else {
 		batch.Meta.CompleteJobState = state
@@ -489,8 +491,8 @@ func (m *batchManager) updateJobCallbackState(batch *batch, callbackType string,
 		}
 		if _, areChildrenSucceeded := m.areChildrenFinished(batch); areChildrenSucceeded && batch.Meta.SuccessJob == "" && state == CallbackJobSucceeded {
 			m.mu.Lock()
+			defer m.mu.Unlock()
 			m.removeBatch(batch)
-			m.mu.Unlock()
 		}
 	}
 	return nil
