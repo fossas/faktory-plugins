@@ -18,6 +18,7 @@ type batch struct {
 	Meta     *batchMeta
 	Parents  []*batch
 	Children []*batch
+	mu       sync.Mutex
 }
 
 type batchMeta struct {
@@ -41,7 +42,6 @@ type batchManager struct {
 	Subsystem *BatchSubsystem
 	rclient   *redis.Client
 	mu        sync.Mutex // this lock is only used for to lock access to Batches
-	batchMu   map[string]*sync.Mutex
 }
 
 const (
@@ -73,6 +73,7 @@ func (m *batchManager) loadExistingBatches() error {
 			Parents:  make([]*batch, 0),
 			Children: make([]*batch, 0),
 			Meta:     &batchMeta{},
+			mu:       sync.Mutex{},
 		}
 
 		if err := m.loadMetadata(batch); err != nil {
@@ -82,7 +83,6 @@ func (m *batchManager) loadExistingBatches() error {
 			continue
 		}
 		m.Batches[vals[idx]] = batch
-		m.batchMu[vals[idx]] = &sync.Mutex{}
 		m.mu.Unlock()
 	}
 
@@ -124,24 +124,24 @@ func (m *batchManager) loadExistingBatches() error {
 
 func (m *batchManager) lockBatchIfExists(batchId string) {
 	m.mu.Lock()
-	if _, ok := m.Batches[batchId]; !ok {
+	batchToLock, ok := m.Batches[batchId]
+	if !ok {
 		m.mu.Unlock()
 		return
 	}
-	lock := m.batchMu[batchId]
 	m.mu.Unlock()
-	lock.Lock()
+	batchToLock.mu.Lock()
 }
 
 func (m *batchManager) unlockBatchIfExists(batchId string) {
 	m.mu.Lock()
-	if _, ok := m.Batches[batchId]; !ok {
+	batchToUnlock, ok := m.Batches[batchId]
+	if !ok {
 		m.mu.Unlock()
 		return
 	}
-	lock := m.batchMu[batchId]
 	m.mu.Unlock()
-	lock.Unlock()
+	batchToUnlock.mu.Unlock()
 }
 
 func (m *batchManager) getBatch(batchId string) (*batch, error) {
@@ -176,7 +176,6 @@ func (m *batchManager) removeBatch(batch *batch) {
 		util.Warnf("removeBatch: unable to remove batch: %v", err)
 	}
 	delete(m.Batches, batch.Id)
-	delete(m.batchMu, batch.Id)
 
 	batch = nil
 }
@@ -240,13 +239,13 @@ func (m *batchManager) newBatch(batchId string, meta *batchMeta) (*batch, error)
 		Parents:  make([]*batch, 0),
 		Children: make([]*batch, 0),
 		Meta:     meta,
+		mu:       sync.Mutex{},
 	}
 	if err := m.init(b); err != nil {
 		return nil, fmt.Errorf("newBatch: %v", err)
 	}
 
 	m.Batches[batchId] = b
-	m.batchMu[batchId] = &sync.Mutex{}
 
 	return b, nil
 }
