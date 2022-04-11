@@ -76,6 +76,20 @@ func (m *batchManager) removeParent(batch *batch, parentBatch *batch) error {
 	return nil
 }
 
+func (m *batchManager) removeChild(batch *batch, childBatch *batch) error {
+	batch.Meta.ChildCount -= 1
+	for i, c := range batch.Children {
+		if c.Id == childBatch.Id {
+			batch.Children = append(batch.Children[:i], batch.Children[i+1:]...)
+			break
+		}
+	}
+	if err := m.rclient.HIncrBy(m.getMetaKey(batch.Id), "child_count", -1).Err(); err != nil {
+		return fmt.Errorf("handleChildComplete: cannot decrement cihldren_count to batch (%s) %v", batch.Id, err)
+	}
+	return nil
+}
+
 func (m *batchManager) removeChildren(b *batch) {
 	// locking must be handled outside of function
 	if len(b.Children) > 0 {
@@ -95,6 +109,10 @@ func (m *batchManager) handleChildComplete(batch *batch, childBatch *batch, areC
 		// batch can be removed as a parent to stop propagation
 		if err := m.removeParent(childBatch, batch); err != nil {
 			util.Warnf("childCompleted: unable to remove parent (%s) from (%s): %v", batch.Id, childBatch.Id, err)
+		}
+		// remove child
+		if err := m.removeChild(batch, childBatch); err != nil {
+			util.Warnf("childCompleted: unable to remove child (%s) from (%s): %v", childBatch.Id, batch.Id, err)
 		}
 	}
 	if m.areBatchJobsCompleted(batch) {

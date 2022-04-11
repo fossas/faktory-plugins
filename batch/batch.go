@@ -119,7 +119,7 @@ func (m *batchManager) lockBatchIfExists(batchId string) {
 
 func (m *batchManager) unlockBatchIfExists(batchId string) {
 	m.mu.Lock()
-	batchToLock, ok := m.Batches[batchId];
+	batchToLock, ok := m.Batches[batchId]
 	if !ok {
 		m.mu.Unlock()
 		return
@@ -580,6 +580,16 @@ func (m *batchManager) handleBatchJobsCompleted(batch *batch, parentsVisited map
 		}
 		m.lockBatchIfExists(parent.Id)
 		parentsVisited[parent.Id] = true
+		m.mu.Lock()
+		if _, ok := m.Batches[parent.Id]; !ok {
+			if err := m.removeParent(batch, parent); err != nil {
+				util.Warnf("handleBatchJobsCompleted: unable to delete parent: %v", err)
+			}
+			m.mu.Unlock()
+			m.unlockBatchIfExists(parent.Id)
+			continue
+		}
+		m.mu.Unlock()
 		m.handleChildComplete(parent, batch, areChildrenFinished, areChildrenSucceeded, parentsVisited)
 		m.unlockBatchIfExists(parent.Id)
 	}
