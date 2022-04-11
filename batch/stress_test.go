@@ -78,6 +78,7 @@ func TestBatchStress(t *testing.T) {
 	batchQueue, err := s.Store().GetQueue("batch_load_complete")
 	assert.Nil(t, err)
 	assert.EqualValues(t, waitGroups*total, int(batchQueue.Size()))
+	close(s.Stopper())
 	s.Stop(nil)
 }
 

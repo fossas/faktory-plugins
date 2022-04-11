@@ -428,7 +428,6 @@ func withServer(batchSystem *BatchSubsystem, enabled bool, runner func(cl *clien
 		panic(err)
 	}
 	defer stopper()
-	defer s.Stop(nil)
 
 	go cli.HandleSignals(s)
 
@@ -457,6 +456,8 @@ func withServer(batchSystem *BatchSubsystem, enabled bool, runner func(cl *clien
 	}
 
 	runner(cl)
+	close(s.Stopper())
+	s.Stop(nil)
 }
 
 func getClient() (*client.Client, error) {
