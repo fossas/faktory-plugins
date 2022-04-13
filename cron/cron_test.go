@@ -267,6 +267,32 @@ func TestCron(t *testing.T) {
 			assert.Equal(t, "test_job_2", jobTwo.Type)
 		})
 	})
+
+	t.Run("allows no cron jobs", func(t *testing.T) {
+		system := new(CronSubsystem)
+		configDir := createConfigDir(t)
+		runSystem(configDir, func(s *server.Server) {
+			s.Options.GlobalConfig["cron_plugin"] = map[string]interface{}{
+				"enabled": true,
+			}
+			err := system.Start(s)
+			assert.Nil(t, err)
+			assert.Len(t, system.Cron.Entries(), 0)
+			assert.True(t, system.Options.Enabled)
+			assert.Len(t, system.Options.CronJobs, 0)
+
+			cronJob := map[string]interface{}{
+				"schedule": "* * * * *",
+				"job": map[string]interface{}{
+					"type": "test_job",
+				},
+			}
+			cronConfig := []map[string]interface{}{cronJob}
+			s.Options.GlobalConfig["cron"] = cronConfig
+			system.Reload(s)
+			assert.Len(t, system.Cron.Entries(), 1)
+		})
+	})
 }
 
 func runSystem(configDir string, runner func(s *server.Server)) {
