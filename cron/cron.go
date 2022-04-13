@@ -138,7 +138,8 @@ func (c *CronSubsystem) getOptions(s *server.Server) (*Options, error) {
 
 	cronJobsValue, ok := s.Options.GlobalConfig["cron"]
 	if !ok {
-		return &options, fmt.Errorf("getOptions: no cron jobs provided")
+		options.CronJobs = cronJobs
+		return &options, nil
 	}
 
 	if cronJobsInterface, ok := cronJobsValue.([]map[string]interface{}); ok {
