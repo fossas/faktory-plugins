@@ -41,7 +41,7 @@ type batchManager struct {
 	Batches   map[string]*batch
 	Subsystem *BatchSubsystem
 	rclient   *redis.Client
-	mu        sync.RWMutex
+	mu        sync.Mutex // this lock is only used for to lock access to Batches
 }
 
 const (
@@ -53,17 +53,12 @@ const (
 	CallbackJobSucceeded = "2"
 )
 
-func (m *batchManager) getBatchFromInterface(batchId interface{}) (*batch, error) {
+func (m *batchManager) getBatchIdFromInterface(batchId interface{}) (string, error) {
 	bid, ok := batchId.(string)
 	if !ok {
-		return nil, errors.New("getBatchFromInterface: invalid custom bid value")
+		return "", errors.New("getBatchIdFromInterface: invalid custom bid value")
 	}
-	batch, err := m.getBatch(bid)
-	if err != nil {
-		util.Warnf("getBatchFromInterface: Unable to retrieve batch: %v", err)
-		return nil, fmt.Errorf("getBatchFromInterface: unable to get batch: %s", bid)
-	}
-	return batch, nil
+	return bid, nil
 }
 
 func (m *batchManager) loadExistingBatches() error {
@@ -72,12 +67,7 @@ func (m *batchManager) loadExistingBatches() error {
 		return fmt.Errorf("loadExistingBatches: retrieve batches: %v", err)
 	}
 	for idx := range vals {
-		batch, err := m.newBatch(vals[idx], &batchMeta{})
-		if err != nil {
-			util.Warnf("loadExistingBatches: error load batch (%s) %v", vals[idx], err)
-			continue
-		}
-		m.Batches[vals[idx]] = batch
+		m.loadBatch(vals[idx])
 	}
 
 	// update parent and children
@@ -112,13 +102,35 @@ func (m *batchManager) loadExistingBatches() error {
 			m.handleBatchJobsCompleted(b, map[string]bool{b.Id: true})
 		}
 	}
-
+	util.Infof("Loaded %d batches", len(m.Batches))
 	return nil
 }
 
+func (m *batchManager) lockBatchIfExists(batchId string) {
+	m.mu.Lock()
+	batchToLock, ok := m.Batches[batchId]
+	if !ok {
+		m.mu.Unlock()
+		return
+	}
+	m.mu.Unlock()
+	batchToLock.mu.Lock()
+}
+
+func (m *batchManager) unlockBatchIfExists(batchId string) {
+	m.mu.Lock()
+	batchToLock, ok := m.Batches[batchId]
+	if !ok {
+		m.mu.Unlock()
+		return
+	}
+	m.mu.Unlock()
+	batchToLock.mu.Unlock()
+}
+
 func (m *batchManager) getBatch(batchId string) (*batch, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if batchId == "" {
 		return nil, fmt.Errorf("getBatch: batchId cannot be blank")
 	}
@@ -136,46 +148,74 @@ func (m *batchManager) getBatch(batchId string) (*batch, error) {
 	}
 	if exists == 0 {
 		m.removeBatch(b)
-		return nil, fmt.Errorf("getBatch: batch was not committed within 2 hours")
+		return nil, fmt.Errorf("getBatch: batch has timed out")
 	}
-
 	return b, nil
 }
 
 func (m *batchManager) removeBatch(batch *batch) {
-	m.mu.Lock()
+	// locking must be handled outside the function
 	if err := m.remove(batch); err != nil {
 		util.Warnf("removeBatch: unable to remove batch: %v", err)
 	}
 	delete(m.Batches, batch.Id)
 
 	batch = nil
-	m.mu.Unlock()
 }
 
 func (m *batchManager) removeStaleBatches() {
-	util.Debugf("Checking for stale batches")
+	// in order to avoid dead locks
+	// Step 1 create a list of batches to delete
+	// Step 2 take a lock on each batch
+	//   - this ensures we wait for any operations on a batch to finish
+	// Step 3 lock access to any batch
+	//   - this way no other locks can be taken
+	// Step 4 delete batches
+	util.Infof("checking for stale batches")
+	var batchesToRemove []string
+	// Step 1
 	for _, b := range m.Batches {
-		createdAt, err := time.Parse(time.RFC3339Nano, b.Meta.CreatedAt)
-		if err != nil {
-			continue
-		}
 		remove := false
-		uncommittedTimeout := time.Now().Add(-time.Duration(m.Subsystem.Options.UncommittedTimeoutMinutes) * time.Minute).UTC()
-		committedTimeout := time.Now().AddDate(0, 0, -m.Subsystem.Options.CommittedTimeoutDays).UTC()
-		if !b.Meta.Committed && createdAt.Before(uncommittedTimeout) {
-			remove = true
-		} else if b.Meta.Committed && createdAt.Before(committedTimeout) {
+		if b.Meta.CreatedAt != "" {
+			createdAt, err := time.Parse(time.RFC3339Nano, b.Meta.CreatedAt)
+			if err != nil {
+				continue
+			}
+			uncommittedTimeout := time.Now().Add(-time.Duration(m.Subsystem.Options.UncommittedTimeoutMinutes) * time.Minute).UTC()
+			committedTimeout := time.Now().AddDate(0, 0, -m.Subsystem.Options.CommittedTimeoutDays).UTC()
+			if !b.Meta.Committed && createdAt.Before(uncommittedTimeout) {
+				remove = true
+			} else if b.Meta.Committed && createdAt.Before(committedTimeout) {
+				remove = true
+			}
+		} else {
 			remove = true
 		}
 
 		if remove {
-			util.Debugf("Removing stale batch %s", b.Id)
-			b.mu.Lock()
-			m.removeBatch(b)
-			b.mu.Unlock()
+			batchesToRemove = append(batchesToRemove, b.Id)
 		}
 	}
+	// Step 2 - lock each batch
+	for _, batchId := range batchesToRemove {
+		if b, ok := m.Batches[batchId]; ok {
+			b.mu.Lock()
+		}
+	}
+	// Step 3 - lock access to all batches
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Step 4 - delete batches and unlock (in case another goroutines is waiting on a lock)
+	for _, batchId := range batchesToRemove {
+		func() {
+			if b, ok := m.Batches[batchId]; ok {
+				defer b.mu.Unlock()
+				m.removeBatch(b)
+			}
+		}()
+	}
+	util.Infof("Removed: %d stale batches", len(batchesToRemove))
 }
 
 func (m *batchManager) newBatchMeta(description string, success string, complete string, childSearchDepth *int) *batchMeta {
@@ -193,6 +233,25 @@ func (m *batchManager) newBatchMeta(description string, success string, complete
 		ChildSearchDepth: childSearchDepth,
 		ChildCount:       0,
 	}
+}
+
+func (m *batchManager) loadBatch(batchId string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	batch := &batch{
+		Id:       batchId,
+		Parents:  make([]*batch, 0),
+		Children: make([]*batch, 0),
+		Meta:     &batchMeta{},
+		mu:       sync.Mutex{},
+	}
+
+	if err := m.loadMetadata(batch); err != nil {
+		util.Warnf("loadExistingBatches: error load batch (%s) %v", batchId, err)
+		m.remove(batch)
+		return
+	}
+	m.Batches[batchId] = batch
 }
 
 func (m *batchManager) newBatch(batchId string, meta *batchMeta) (*batch, error) {
@@ -238,53 +297,10 @@ func (m *batchManager) getCompleteJobStateKey(batchId string) string {
 	return fmt.Sprintf("complete-st-%s", batchId)
 }
 
-func (m *batchManager) init(batch *batch) error {
+func (m *batchManager) loadMetadata(batch *batch) error {
 	meta, err := m.rclient.HGetAll(m.getMetaKey(batch.Id)).Result()
 	if err != nil {
 		return fmt.Errorf("init: unable to retrieve meta: %v", err)
-	}
-
-	if err := m.rclient.SAdd("batches", batch.Id).Err(); err != nil {
-		return fmt.Errorf("init: store batch: %v", err)
-	}
-
-	expiration := time.Duration(m.Subsystem.Options.UncommittedTimeoutMinutes) * time.Minute
-	if err := m.rclient.SetNX(m.getBatchKey(batch.Id), batch.Id, expiration).Err(); err != nil {
-		return fmt.Errorf("init: set expiration: %v", err)
-	}
-
-	if len(meta) == 0 {
-		// set default values
-		data := map[string]interface{}{
-			"total":        batch.Meta.Total,
-			"failed":       batch.Meta.Failed,
-			"succeeded":    batch.Meta.Succeeded,
-			"pending":      batch.Meta.Pending,
-			"created_at":   batch.Meta.CreatedAt,
-			"description":  batch.Meta.Description,
-			"committed":    batch.Meta.Committed,
-			"success_job":  batch.Meta.SuccessJob,
-			"complete_job": batch.Meta.CompleteJob,
-			"child_count":  batch.Meta.ChildCount,
-		}
-		if batch.Meta.ChildSearchDepth != nil {
-			data["child_search_depth"] = *batch.Meta.ChildSearchDepth
-		}
-		if err := m.rclient.HMSet(m.getMetaKey(batch.Id), data).Err(); err != nil {
-			return fmt.Errorf("init: could not load meta for batch: %s: %v", batch.Id, err)
-		}
-		if err := m.rclient.Expire(m.getMetaKey(batch.Id), expiration).Err(); err != nil {
-			return fmt.Errorf("init: could set expiration for batch meta: %v", err)
-		}
-
-		timeout := time.Duration(m.Subsystem.Options.CommittedTimeoutDays) * 24 * time.Hour
-		if err := m.rclient.SetNX(m.getSuccessJobStateKey(batch.Id), CallbackJobPending, timeout).Err(); err != nil {
-			return fmt.Errorf("init: could not set success_st: %v", err)
-		}
-		if err := m.rclient.SetNX(m.getCompleteJobStateKey(batch.Id), CallbackJobPending, timeout).Err(); err != nil {
-			return fmt.Errorf("init: could not set complete_st: %v", err)
-		}
-		return nil
 	}
 
 	batch.Meta.Total, err = strconv.Atoi(meta["total"])
@@ -338,6 +354,48 @@ func (m *batchManager) init(batch *batch) error {
 		return fmt.Errorf("init: get completed job state: %v", err)
 	}
 	batch.Meta.CompleteJobState = completeJobState
+
+	return nil
+}
+
+func (m *batchManager) init(batch *batch) error {
+	if err := m.rclient.SAdd("batches", batch.Id).Err(); err != nil {
+		return fmt.Errorf("init: store batch: %v", err)
+	}
+
+	expiration := time.Duration(m.Subsystem.Options.UncommittedTimeoutMinutes) * time.Minute
+	if err := m.rclient.SetNX(m.getBatchKey(batch.Id), batch.Id, expiration).Err(); err != nil {
+		return fmt.Errorf("init: set expiration: %v", err)
+	}
+
+	// set default values
+	data := map[string]interface{}{
+		"total":        batch.Meta.Total,
+		"failed":       batch.Meta.Failed,
+		"succeeded":    batch.Meta.Succeeded,
+		"pending":      batch.Meta.Pending,
+		"created_at":   batch.Meta.CreatedAt,
+		"description":  batch.Meta.Description,
+		"committed":    batch.Meta.Committed,
+		"success_job":  batch.Meta.SuccessJob,
+		"complete_job": batch.Meta.CompleteJob,
+		"child_count":  batch.Meta.ChildCount,
+	}
+	if batch.Meta.ChildSearchDepth != nil {
+		data["child_search_depth"] = *batch.Meta.ChildSearchDepth
+	}
+	if err := m.rclient.HMSet(m.getMetaKey(batch.Id), data).Err(); err != nil {
+		return fmt.Errorf("init: could not load meta for batch: %s: %v", batch.Id, err)
+	}
+	if err := m.rclient.Expire(m.getMetaKey(batch.Id), expiration).Err(); err != nil {
+		return fmt.Errorf("init: could set expiration for batch meta: %v", err)
+	}
+	if err := m.rclient.SetNX(m.getSuccessJobStateKey(batch.Id), CallbackJobPending, expiration).Err(); err != nil {
+		return fmt.Errorf("init: could not set success_st: %v", err)
+	}
+	if err := m.rclient.SetNX(m.getCompleteJobStateKey(batch.Id), CallbackJobPending, expiration).Err(); err != nil {
+		return fmt.Errorf("init: could not set complete_st: %v", err)
+	}
 
 	return nil
 }
@@ -399,6 +457,12 @@ func (m *batchManager) remove(batch *batch) error {
 	if err := m.rclient.Del(m.getChildKey(batch.Id)).Err(); err != nil {
 		return fmt.Errorf("remove: batch children (%s), %v", batch.Id, err)
 	}
+	if err := m.rclient.Del(m.getSuccessJobStateKey(batch.Id)).Err(); err != nil {
+		return fmt.Errorf("remove: could delete expire success_st: %v", err)
+	}
+	if err := m.rclient.Del(m.getCompleteJobStateKey(batch.Id)).Err(); err != nil {
+		return fmt.Errorf("updatedCommitted: could not deletecomplete_st: %v", err)
+	}
 	return nil
 }
 
@@ -407,38 +471,54 @@ func (m *batchManager) updateCommitted(batch *batch, committed bool) error {
 	if err := m.rclient.HSet(m.getMetaKey(batch.Id), "committed", committed).Err(); err != nil {
 		return fmt.Errorf("updateCommitted: could not update committed: %v", err)
 	}
-
+	var expiration time.Duration
 	if committed {
-		// number of days a batch can exist
-		if err := m.rclient.Expire(m.getBatchKey(batch.Id), time.Duration(m.Subsystem.Options.CommittedTimeoutDays)*time.Hour*24).Err(); err != nil {
-			return fmt.Errorf("updatedCommitted: could not not expire after committed: %v", err)
-		}
+		expiration = time.Duration(m.Subsystem.Options.CommittedTimeoutDays) * time.Hour * 24
 	} else {
-		if err := m.rclient.Expire(m.getBatchKey(batch.Id), time.Duration(m.Subsystem.Options.UncommittedTimeoutMinutes)*time.Minute).Err(); err != nil {
-			return fmt.Errorf("updatedCommitted: could not expire: %v", err)
-		}
+		expiration = time.Duration(m.Subsystem.Options.UncommittedTimeoutMinutes) * time.Minute
 	}
+	if err := m.rclient.Expire(m.getBatchKey(batch.Id), expiration).Err(); err != nil {
+		return fmt.Errorf("updatedCommitted: could not set expire for batch: %v", err)
+	}
+	if err := m.rclient.Expire(m.getMetaKey(batch.Id), expiration).Err(); err != nil {
+		return fmt.Errorf("updatedCommitted: could not set expire for batch meta: %v", err)
+	}
+	if err := m.rclient.Expire(m.getSuccessJobStateKey(batch.Id), expiration).Err(); err != nil {
+		return fmt.Errorf("updatedCommitted: could not set expire success_st: %v", err)
+	}
+	if err := m.rclient.Expire(m.getCompleteJobStateKey(batch.Id), expiration).Err(); err != nil {
+		return fmt.Errorf("updatedCommitted: could not set expire for complete_st: %v", err)
+	}
+
 	return nil
 }
 
 func (m *batchManager) updateJobCallbackState(batch *batch, callbackType string, state string) error {
 	// locking must be handled outside of call
-	timeout := time.Duration(m.Subsystem.Options.CommittedTimeoutDays) * 24 * time.Hour
+	expire := time.Duration(m.Subsystem.Options.CommittedTimeoutDays) * 24 * time.Hour
 	if callbackType == "success" {
 		batch.Meta.SuccessJobState = state
-		if err := m.rclient.Set(m.getSuccessJobStateKey(batch.Id), state, timeout).Err(); err != nil {
+		if err := m.rclient.Set(m.getSuccessJobStateKey(batch.Id), state, expire).Err(); err != nil {
 			return fmt.Errorf("updateJobCallbackState: could not set success_st: %v", err)
 		}
 		if state == CallbackJobSucceeded {
-			m.removeBatch(batch)
+			func() {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+				m.removeBatch(batch)
+			}()
 		}
 	} else {
 		batch.Meta.CompleteJobState = state
-		if err := m.rclient.Set(m.getCompleteJobStateKey(batch.Id), state, timeout).Err(); err != nil {
+		if err := m.rclient.Set(m.getCompleteJobStateKey(batch.Id), state, expire).Err(); err != nil {
 			return fmt.Errorf("updateJobCallbackState: could not set completed_st: %v", err)
 		}
 		if _, areChildrenSucceeded := m.areChildrenFinished(batch); areChildrenSucceeded && batch.Meta.SuccessJob == "" && state == CallbackJobSucceeded {
-			m.removeBatch(batch)
+			func() {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+				m.removeBatch(batch)
+			}()
 		}
 	}
 	return nil
@@ -498,10 +578,20 @@ func (m *batchManager) handleBatchJobsCompleted(batch *batch, parentsVisited map
 			// parent has already been notified
 			continue
 		}
-		parent.mu.Lock()
+		m.lockBatchIfExists(parent.Id)
 		parentsVisited[parent.Id] = true
+		m.mu.Lock()
+		if _, ok := m.Batches[parent.Id]; !ok {
+			if err := m.removeParent(batch, parent); err != nil {
+				util.Warnf("handleBatchJobsCompleted: unable to delete parent: %v", err)
+			}
+			m.mu.Unlock()
+			m.unlockBatchIfExists(parent.Id)
+			continue
+		}
+		m.mu.Unlock()
 		m.handleChildComplete(parent, batch, areChildrenFinished, areChildrenSucceeded, parentsVisited)
-		parent.mu.Unlock()
+		m.unlockBatchIfExists(parent.Id)
 	}
 }
 

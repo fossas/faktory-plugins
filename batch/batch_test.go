@@ -399,11 +399,20 @@ func TestRemoveStaleBatches(t *testing.T) {
 		_, err = batchSystem.batchManager.newBatch(uncommittedBatchId, uncommittedMeta)
 		assert.Nil(t, err)
 
+		batchSystem.batchManager.lockBatchIfExists(uncommittedBatchId)
+		go func() {
+			time.Sleep(1)
+			batchSystem.batchManager.unlockBatchIfExists(uncommittedBatchId)
+			batchSystem.batchManager.lockBatchIfExists(uncommittedBatchId)
+			time.Sleep(1)
+			batchSystem.batchManager.unlockBatchIfExists(uncommittedBatchId)
+		}()
 		batchSystem.batchManager.removeStaleBatches()
 
 		_, err = batchSystem.batchManager.getBatch(committedBatchId)
 		assert.EqualError(t, err, "getBatch: no batch found")
 
+		batchSystem.batchManager.lockBatchIfExists(uncommittedBatchId)
 		_, err = batchSystem.batchManager.getBatch(uncommittedBatchId)
 		assert.EqualError(t, err, "getBatch: no batch found")
 	})
@@ -419,7 +428,6 @@ func withServer(batchSystem *BatchSubsystem, enabled bool, runner func(cl *clien
 		panic(err)
 	}
 	defer stopper()
-	defer s.Stop(nil)
 
 	go cli.HandleSignals(s)
 
@@ -448,6 +456,8 @@ func withServer(batchSystem *BatchSubsystem, enabled bool, runner func(cl *clien
 	}
 
 	runner(cl)
+	close(s.Stopper())
+	s.Stop(nil)
 }
 
 func getClient() (*client.Client, error) {

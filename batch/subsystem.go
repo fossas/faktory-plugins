@@ -37,7 +37,7 @@ func (b *BatchSubsystem) Start(s *server.Server) error {
 	b.Server = s
 	b.batchManager = &batchManager{
 		Batches:   make(map[string]*batch),
-		mu:        sync.RWMutex{},
+		mu:        sync.Mutex{},
 		rclient:   b.Server.Manager().Redis(),
 		Subsystem: b,
 	}
@@ -48,7 +48,7 @@ func (b *BatchSubsystem) Start(s *server.Server) error {
 	server.CommandSet["BATCH"] = b.batchCommand
 	b.addMiddleware()
 
-	b.Server.AddTask(3600, &removeStaleBatches{b})
+	b.Server.AddTask(3600*24, &removeStaleBatches{b}) // once a day
 	util.Info("Loaded batching plugin")
 	return nil
 }

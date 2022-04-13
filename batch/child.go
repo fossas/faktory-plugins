@@ -35,7 +35,7 @@ func (m *batchManager) addChild(batch *batch, childBatch *batch) error {
 		return fmt.Errorf("addChild: erorr adding parent batch (%s) to child (%s): %v", batch.Id, childBatch.Id, err)
 	}
 	if m.areBatchJobsCompleted(batch) {
-		m.handleBatchJobsCompleted(batch, map[string]bool{batch.Id: true})
+		m.handleBatchJobsCompleted(batch, map[string]bool{batch.Id: true, childBatch.Id: true})
 	}
 	return nil
 }
@@ -76,6 +76,20 @@ func (m *batchManager) removeParent(batch *batch, parentBatch *batch) error {
 	return nil
 }
 
+func (m *batchManager) removeChild(batch *batch, childBatch *batch) error {
+	batch.Meta.ChildCount -= 1
+	for i, c := range batch.Children {
+		if c.Id == childBatch.Id {
+			batch.Children = append(batch.Children[:i], batch.Children[i+1:]...)
+			break
+		}
+	}
+	if err := m.rclient.HIncrBy(m.getMetaKey(batch.Id), "child_count", -1).Err(); err != nil {
+		return fmt.Errorf("handleChildComplete: cannot decrement cihldren_count to batch (%s) %v", batch.Id, err)
+	}
+	return nil
+}
+
 func (m *batchManager) removeChildren(b *batch) {
 	// locking must be handled outside of function
 	if len(b.Children) > 0 {
@@ -96,6 +110,10 @@ func (m *batchManager) handleChildComplete(batch *batch, childBatch *batch, areC
 		if err := m.removeParent(childBatch, batch); err != nil {
 			util.Warnf("childCompleted: unable to remove parent (%s) from (%s): %v", batch.Id, childBatch.Id, err)
 		}
+		// remove child
+		if err := m.removeChild(batch, childBatch); err != nil {
+			util.Warnf("childCompleted: unable to remove child (%s) from (%s): %v", childBatch.Id, batch.Id, err)
+		}
 	}
 	if m.areBatchJobsCompleted(batch) {
 		m.handleBatchJobsCompleted(batch, parentsVisited)
@@ -103,6 +121,9 @@ func (m *batchManager) handleChildComplete(batch *batch, childBatch *batch, areC
 }
 
 func (m *batchManager) areChildrenFinished(b *batch) (bool, bool) {
+	if len(b.Children) != b.Meta.ChildCount && b.Meta.ChildCount != 0 {
+		return false, false
+	}
 	// iterate through children up to a certain depth
 	// check to see if any batch still has jobs being processed
 	currentDepth := 1
