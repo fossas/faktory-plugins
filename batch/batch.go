@@ -502,7 +502,7 @@ func (m *batchManager) updateJobCallbackState(batch *batch, callbackType string,
 			return fmt.Errorf("updateJobCallbackState: could not set success_st: %v", err)
 		}
 		if state == CallbackJobSucceeded {
-			go func() {
+			func() {
 				m.mu.Lock()
 				defer m.mu.Unlock()
 				m.removeBatch(batch)
@@ -514,7 +514,7 @@ func (m *batchManager) updateJobCallbackState(batch *batch, callbackType string,
 			return fmt.Errorf("updateJobCallbackState: could not set completed_st: %v", err)
 		}
 		if _, areChildrenSucceeded := m.areChildrenFinished(batch); areChildrenSucceeded && batch.Meta.SuccessJob == "" && state == CallbackJobSucceeded {
-			go func() {
+			func() {
 				m.mu.Lock()
 				defer m.mu.Unlock()
 				m.removeBatch(batch)

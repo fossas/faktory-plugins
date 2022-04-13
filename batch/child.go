@@ -121,6 +121,9 @@ func (m *batchManager) handleChildComplete(batch *batch, childBatch *batch, areC
 }
 
 func (m *batchManager) areChildrenFinished(b *batch) (bool, bool) {
+	if len(b.Children) != b.Meta.ChildCount && b.Meta.ChildCount != 0 {
+		return false, false
+	}
 	// iterate through children up to a certain depth
 	// check to see if any batch still has jobs being processed
 	currentDepth := 1
