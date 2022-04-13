@@ -149,8 +149,8 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		}
 
 		b.batchManager.lockBatchIfExists(childBatchId)
-		defer b.batchManager.unlockBatchIfExists(childBatchId)
 		childBatch, err := b.batchManager.getBatch(childBatchId)
+		// ok is used so the batch can be closed
 		ok := true
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot get child batch: %v", err))
@@ -159,6 +159,8 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 			_ = c.Error(cmd, fmt.Errorf("cannot add child (%s) to batch (%s): %v", childBatchId, batchId, err))
 			ok = false
 		}
+		// unlock child batch in the off chance it is a transitional parent of batch
+		b.batchManager.unlockBatchIfExists(childBatchId)
 		// ensure batch is committed if it was opened
 		if opened {
 			if err := b.batchManager.commit(batch); err != nil {
