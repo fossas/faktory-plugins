@@ -61,6 +61,8 @@ func (m *batchManager) getBatchIdFromInterface(batchId interface{}) (string, err
 	return bid, nil
 }
 
+// Only loads batches that exist in redis. We do not check if any batches have
+// finished here because batches should only be checked on job events.
 func (m *batchManager) loadExistingBatches() error {
 	vals, err := m.rclient.SMembers("batches").Result()
 	if err != nil {
@@ -97,11 +99,10 @@ func (m *batchManager) loadExistingBatches() error {
 			}
 			b.Children = append(b.Children, childBatch)
 		}
-
-		if m.areBatchJobsCompleted(b) {
-			m.handleBatchJobsCompleted(b, map[string]bool{b.Id: true})
-		}
 	}
+
+	m.removeStaleBatches()
+
 	util.Infof("Loaded %d batches", len(m.Batches))
 	return nil
 }
@@ -302,7 +303,10 @@ func (m *batchManager) loadMetadata(batch *batch) error {
 	if err != nil {
 		return fmt.Errorf("init: unable to retrieve meta: %v", err)
 	}
-
+	if len(meta) == 0 {
+		return fmt.Errorf("init: failed: batch meta has expired")
+		// the batch meta has expired
+	}
 	batch.Meta.Total, err = strconv.Atoi(meta["total"])
 	if err != nil {
 		return fmt.Errorf("init: total: failed converting string to int: %v", err)
