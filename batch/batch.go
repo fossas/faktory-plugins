@@ -305,7 +305,6 @@ func (m *batchManager) loadMetadata(batch *batch) error {
 	}
 	if len(meta) == 0 {
 		return fmt.Errorf("init: failed: batch meta has expired")
-		// the batch meta has expired
 	}
 	batch.Meta.Total, err = strconv.Atoi(meta["total"])
 	if err != nil {
