@@ -82,6 +82,9 @@ func (m *metricsTask) Execute() error {
 
 				return nil
 			})
+			if err := m.Subsystem.StatsDClient().Gauge(queueLatencyMetricName, float64(timeElapsed.Milliseconds()), m.Subsystem.Options.Tags, 1); err != nil {
+				util.Warnf("unable to submit metric: %v", err)
+			}
 			if err := m.Subsystem.StatsDClient().Timing(queueLatencyMetricName, timeElapsed, m.Subsystem.Options.Tags, 1); err != nil {
 				util.Warnf("unable to submit metric: %v", err)
 			}
