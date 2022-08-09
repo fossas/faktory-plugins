@@ -61,7 +61,7 @@ func (m *metricsTask) Execute() error {
 			}
 
 			queueLatencyMetricName := m.Subsystem.PrefixMetricName(fmt.Sprintf("enqueued.%s.time", queue.Name()))
-			var timeElapsed int64 = 0
+			var timeElapsed time.Duration = 0
 			// This does an LRANGE on the queue
 			// start is the offset from the left of the queue
 			// count is not the number of items to fetch, but rather the offset to the last item to return
@@ -78,11 +78,11 @@ func (m *metricsTask) Execute() error {
 					util.Warnf("metrics task unable to parse EnqueuedAt: %v", err)
 					return nil
 				}
-				timeElapsed = time.Duration(time.Now().Sub(t)).Milliseconds()
+				timeElapsed = time.Duration(time.Now().Sub(t))
 
 				return nil
 			})
-			if err := m.Subsystem.StatsDClient().Gauge(queueLatencyMetricName, float64(timeElapsed), m.Subsystem.Options.Tags, 1); err != nil {
+			if err := m.Subsystem.StatsDClient().Timing(queueLatencyMetricName, timeElapsed, m.Subsystem.Options.Tags, 1); err != nil {
 				util.Warnf("unable to submit metric: %v", err)
 			}
 
