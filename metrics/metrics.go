@@ -116,7 +116,7 @@ func (m *MetricsSubsystem) createStatsDClient() error {
 
 	// dogstatsd doesn't parse DD_TAGS so do it here
 	if value := os.Getenv("DD_TAGS"); value != "" {
-		for _, tag := range strings.Split(value, "") {
+		for _, tag := range strings.Split(value, " ") {
 			tags = append(tags, strings.TrimSpace(tag))
 		}
 	}
