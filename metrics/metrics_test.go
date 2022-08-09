@@ -124,6 +124,7 @@ func TestMetrics(t *testing.T) {
 			mockDoer.EXPECT().Gauge("jobs.enqueued.builds.time", gomock.Any(), tags, gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Timing("jobs.enqueued.builds.time", gomock.Any(), tags, gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.enqueued.tests.count", float64(1), tags, gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("jobs.enqueued.tests.time", gomock.Any(), tags, gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Timing("jobs.enqueued.tests.time", gomock.Any(), tags, gomock.Any()).Return(nil).Times(1)
 
 			// create 15 jobs
