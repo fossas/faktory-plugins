@@ -61,6 +61,7 @@ func (m *metricsTask) Execute() error {
 			}
 
 			queueLatencyMetricName := m.Subsystem.PrefixMetricName(fmt.Sprintf("enqueued.%s.time", queue.Name()))
+			queueLatencyMetricNameHist := m.Subsystem.PrefixMetricName(fmt.Sprintf("enqueued.%s.time_hist", queue.Name()))
 			var timeElapsed time.Duration = 0
 			// This does an LRANGE on the queue
 			// start is the offset from the left of the queue
@@ -85,7 +86,7 @@ func (m *metricsTask) Execute() error {
 			if err := m.Subsystem.StatsDClient().Gauge(queueLatencyMetricName, float64(timeElapsed.Milliseconds()), m.Subsystem.Options.Tags, 1); err != nil {
 				util.Warnf("unable to submit metric: %v", err)
 			}
-			if err := m.Subsystem.StatsDClient().Timing(queueLatencyMetricName, timeElapsed, m.Subsystem.Options.Tags, 1); err != nil {
+			if err := m.Subsystem.StatsDClient().Timing(queueLatencyMetricNameHist, timeElapsed, m.Subsystem.Options.Tags, 1); err != nil {
 				util.Warnf("unable to submit metric: %v", err)
 			}
 
