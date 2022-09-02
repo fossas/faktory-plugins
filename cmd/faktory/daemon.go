@@ -15,9 +15,14 @@ import (
 	"github.com/fossas/faktory-plugins/uniq"
 )
 
+var (
+	version = "dev"
+	commit  = "n/a"
+)
+
 func logPreamble() {
 	log.SetFlags(0)
-	log.Println(client.Name, client.Version)
+	log.Println(client.Name, version, fmt.Sprintf("commit: %s", commit))
 	log.Println(fmt.Sprintf("Copyright © %d Contributed Systems LLC and FOSSA Inc", time.Now().Year()))
 	log.Println("Licensed under the GNU Affero Public License 3.0")
 }
