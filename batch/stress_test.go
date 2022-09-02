@@ -2,9 +2,6 @@ package batch
 
 import (
 	"fmt"
-	"github.com/contribsys/faktory/cli"
-	"github.com/contribsys/faktory/client"
-	"github.com/stretchr/testify/assert"
 	"log"
 	"os"
 	"os/signal"
@@ -13,13 +10,24 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/contribsys/faktory/cli"
+	"github.com/contribsys/faktory/client"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestBatchStress(t *testing.T) {
 	batchSystem := new(BatchSubsystem)
 	dir := "/tmp/batching_stress_test.db"
 	defer os.RemoveAll(dir)
-	opts := &cli.CliOptions{"localhost:7416", "localhost:7420", "development", ".", "debug", dir}
+	opts := &cli.CliOptions{
+		CmdBinding:       "localhost:7416",
+		WebBinding:       "localhost:7420",
+		Environment:      "development",
+		ConfigDirectory:  ".",
+		LogLevel:         "debug",
+		StorageDirectory: dir,
+	}
 	s, stopper, err := cli.BuildServer(opts)
 	if stopper != nil {
 		defer stopper()

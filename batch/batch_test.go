@@ -3,7 +3,6 @@ package batch
 import (
 	"errors"
 	"fmt"
-	"github.com/contribsys/faktory/util"
 	"math/rand"
 	"os"
 	"strconv"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/contribsys/faktory/cli"
 	"github.com/contribsys/faktory/client"
+	"github.com/contribsys/faktory/util"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -157,7 +157,8 @@ func TestBatchCompleteAndEventualSuccess(t *testing.T) {
 			err := b.Push(client.NewJob("JobOne", 1))
 			assert.Nil(t, err)
 			jobTwo := client.NewJob("JobTwo", 2)
-			jobTwo.Retry = 2
+			two := 2
+			jobTwo.Retry = &two
 			err = b.Push(jobTwo)
 			assert.Nil(t, err)
 			return nil
@@ -421,7 +422,14 @@ func TestRemoveStaleBatches(t *testing.T) {
 func withServer(batchSystem *BatchSubsystem, enabled bool, runner func(cl *client.Client)) {
 	dir := "/tmp/batching_test.db"
 	defer os.RemoveAll(dir)
-	opts := &cli.CliOptions{"localhost:7416", "localhost:7420", "development", ".", "debug", dir}
+	opts := &cli.CliOptions{
+		CmdBinding:       "localhost:7416",
+		WebBinding:       "localhost:7420",
+		Environment:      "development",
+		ConfigDirectory:  ".",
+		LogLevel:         "debug",
+		StorageDirectory: dir,
+	}
 	s, stopper, err := cli.BuildServer(opts)
 
 	if err != nil {
