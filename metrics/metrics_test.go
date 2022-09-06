@@ -170,7 +170,8 @@ func TestMetrics(t *testing.T) {
 
 			// 3 test queue
 			job := createJob("tests", "Test", 1)
-			job.Retry = 3
+			three := 3
+			job.Retry = &three
 			if err := cl.Push(job); err != nil {
 				panic(err)
 			}
@@ -238,14 +239,21 @@ func handleError(err error) {
 func createJob(queue string, jobtype string, args ...interface{}) *client.Job {
 	job := client.NewJob(jobtype, args...)
 	job.Queue = queue
-	job.Retry = 0
+	job.Retry = new(int)
 	return job
 }
 
 func runSystem(configDir string, runner func(s *server.Server, cl *client.Client)) {
 	dir := "/tmp/batching_system.db"
 	defer os.RemoveAll(dir)
-	opts := &cli.CliOptions{"localhost:7418", "localhost:7420", "development", configDir, "debug", dir}
+	opts := &cli.CliOptions{
+		CmdBinding:       "localhost:7418",
+		WebBinding:       "localhost:7420",
+		Environment:      "development",
+		ConfigDirectory:  configDir,
+		LogLevel:         "debug",
+		StorageDirectory: dir,
+	}
 	s, stopper, err := cli.BuildServer(opts)
 
 	if err != nil {
