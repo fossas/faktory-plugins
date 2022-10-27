@@ -11,6 +11,7 @@ import (
 	"github.com/contribsys/faktory/webui"
 	"github.com/fossas/faktory-plugins/batch"
 	"github.com/fossas/faktory-plugins/cron"
+	"github.com/fossas/faktory-plugins/expire"
 	"github.com/fossas/faktory-plugins/metrics"
 	"github.com/fossas/faktory-plugins/uniq"
 )
@@ -56,6 +57,7 @@ func main() {
 	s.Register(new(metrics.MetricsSubsystem))
 	s.Register(new(cron.CronSubsystem))
 	s.Register(new(batch.BatchSubsystem))
+	s.Register(new(expire.ExpireSubsystem))
 	go cli.HandleSignals(s)
 
 	go func() {
