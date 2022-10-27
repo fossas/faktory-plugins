@@ -13,10 +13,11 @@ import (
 var _ server.Subsystem = &ExpireSubsystem{}
 
 // ExpireSubsystem allows jobs to expire.
-//
+// It's implementation is similar to that of https://github.com/contribsys/faktory/wiki/Ent-Expiring-Jobs
+// except that `expires_in` takes a duration string rather than seconds.
 type ExpireSubsystem struct{}
 
-// Start loads the plugin.
+// Start loads the plugin by installing the middlewares.
 func (e *ExpireSubsystem) Start(s *server.Server) error {
 	s.Manager().AddMiddleware("push", e.parseExpiration)
 	s.Manager().AddMiddleware("fetch", e.skipExpiredJobs)
@@ -34,6 +35,8 @@ func (e *ExpireSubsystem) Reload(s *server.Server) error {
 	return nil
 }
 
+// parseExpiration ensures that `expires_at` and `expires_in` are valid.
+// If `expires_in` is set it will be parsed and used to set `expires_at`.
 func (e *ExpireSubsystem) parseExpiration(next func() error, ctx manager.Context) error {
 	// If `expires_at` is set then validate that it's a proper ISO 8601 timestamp.
 	ea, aok := ctx.Job().GetCustom("expires_at")
@@ -62,13 +65,15 @@ func (e *ExpireSubsystem) parseExpiration(next func() error, ctx manager.Context
 		if err != nil {
 			return fmt.Errorf("expire: Could not parse expires_in: %w", err)
 		}
-
 		ctx.Job().SetExpiresIn(duration)
 	}
 
 	return next()
 }
 
+// skipExpiredJobs is a FETCH chain middleware that ensures a job is not expired.
+// If the job is expired it will return an error that instructs Faktory to
+// restart the fetch.
 func (e *ExpireSubsystem) skipExpiredJobs(next func() error, ctx manager.Context) error {
 	if ea, ok := ctx.Job().GetCustom("expires_at"); ok {
 		expires_at, err := time.Parse(time.RFC3339Nano, ea.(string))
