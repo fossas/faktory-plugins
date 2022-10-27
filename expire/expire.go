@@ -78,7 +78,7 @@ func (e *ExpireSubsystem) skipExpiredJobs(next func() error, ctx manager.Context
 	if ea, ok := ctx.Job().GetCustom("expires_at"); ok {
 		expires_at, err := time.Parse(time.RFC3339Nano, ea.(string))
 		if err != nil {
-			util.Warnf("expire: error parsing expires_at: %w", err)
+			util.Warnf("expire: error parsing expires_at: %v", err)
 			return next()
 		}
 
