@@ -58,7 +58,7 @@ Specify the host with `DD_AGENT_HOST`
 
 Enables enqueueing of jobs with a cron format
 
-### Configuration
+#### Configuration
 
 ```
 [cron_plugin]
@@ -94,29 +94,28 @@ Each `[[ cron ]]` entry must have:
 
 `type`: Faktory Job type to be queued
 
-### Cron expressions
+#### Cron expressions
 
- Field name   | Mandatory? | Allowed values  | Allowed special characters
-----------   | ---------- | --------------  | --------------------------
-Seconds      | Yes        | 0-59            | * / , -
-Minutes      | Yes        | 0-59            | * / , -
-Hours        | Yes        | 0-23            | * / , -
-Day of month | Yes        | 1-31            | * / , - ?
-Month        | Yes        | 1-12 or JAN-DEC | * / , -
-Day of week  | Yes        | 0-6 or SUN-SAT  | * / , - ?
-
+| Field name   | Mandatory? | Allowed values  | Allowed special characters |
+| ------------ | ---------- | --------------- | -------------------------- |
+| Seconds      | Yes        | 0-59            | \* / , -                   |
+| Minutes      | Yes        | 0-59            | \* / , -                   |
+| Hours        | Yes        | 0-23            | \* / , -                   |
+| Day of month | Yes        | 1-31            | \* / , - ?                 |
+| Month        | Yes        | 1-12 or JAN-DEC | \* / , -                   |
+| Day of week  | Yes        | 0-6 or SUN-SAT  | \* / , - ?                 |
 
 Predefined schedules
 
 You may use one of several pre-defined schedules in place of a cron expression.
 
-Entry                  | Description                                | Equivalent To
------                  | -----------                                | -------------
-@yearly (or @annually) | Run once a year, midnight, Jan. 1st        | 0 0 0 1 1 *
-@monthly               | Run once a month, midnight, first of month | 0 0 0 1 * *
-@weekly                | Run once a week, midnight between Sat/Sun  | 0 0 0 * * 0
-@daily (or @midnight)  | Run once a day, midnight                   | 0 0 0 * * *
-@hourly                | Run once an hour, beginning of hour        | 0 0 * * * *
+| Entry                  | Description                                | Equivalent To   |
+| ---------------------- | ------------------------------------------ | --------------- |
+| @yearly (or @annually) | Run once a year, midnight, Jan. 1st        | 0 0 0 1 1 \*    |
+| @monthly               | Run once a month, midnight, first of month | 0 0 0 1 \* \*   |
+| @weekly                | Run once a week, midnight between Sat/Sun  | 0 0 0 \* \* 0   |
+| @daily (or @midnight)  | Run once a day, midnight                   | 0 0 0 \* \* \*  |
+| @hourly                | Run once an hour, beginning of hour        | 0 0 \* \* \* \* |
 
 Intervals
 
@@ -129,6 +128,10 @@ where "duration" is a string accepted by time.ParseDuration (http://golang.org/p
 Passing job arguments
 
 arguments for jobs can be passed using `args = [1,2,3]` or using `[[cron.job.args]]` and adding key, pair values.
+
+### Expiring Jobs
+
+Jobs can be configured to automatically expire after a preset time has passed by setting the `expires_at` custom attribute to an ISO8601 timestamp. Alternatively, you can set the `expires_in` custom attribute to a Golang Duration string to expire a job a given duration after it was enqueued.
 
 ## License
 
