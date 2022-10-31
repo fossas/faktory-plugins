@@ -107,7 +107,7 @@ func (c *CronSubsystem) createCron() {
 }
 
 func (c *CronSubsystem) addCronJobs() error {
-	for index, _ := range c.Options.CronJobs {
+	for index := range c.Options.CronJobs {
 		job := &c.Options.CronJobs[index]
 		id, err := c.Cron.AddJob(job.Schedule, &QueueJob{
 			Subsystem: c,
