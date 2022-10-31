@@ -1,8 +1,8 @@
 module github.com/fossas/faktory-plugins
 
-go 1.18
+go 1.19
 
-require github.com/contribsys/faktory v1.6.1
+require github.com/contribsys/faktory v1.6.2
 
 require (
 	github.com/DataDog/datadog-go v4.8.2+incompatible
