@@ -3,6 +3,7 @@ package cron
 import (
 	"encoding/json"
 	"fmt"
+
 	"github.com/DataDog/datadog-go/statsd"
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/server"

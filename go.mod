@@ -24,3 +24,5 @@ require (
 	golang.org/x/sys v0.0.0-20211013075003-97ac67df715c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/BurntSushi/toml v0.4.1 => github.com/BurntSushi/toml v1.2.1
