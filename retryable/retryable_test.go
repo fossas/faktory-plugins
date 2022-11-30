@@ -34,12 +34,12 @@ func TestRetry(t *testing.T) {
 }
 
 func withServer(runner func(cl *client.Client)) {
-	dir := "/tmp/plugin_test.db"
+	dir := "/tmp/retry_test.db"
 	defer os.RemoveAll(dir)
 
 	opts := &cli.CliOptions{
-		CmdBinding:       "localhost:7416",
-		WebBinding:       "localhost:7420",
+		CmdBinding:       "localhost:7414",
+		WebBinding:       "localhost:7415",
 		Environment:      "development",
 		ConfigDirectory:  ".",
 		LogLevel:         "debug",
@@ -82,7 +82,7 @@ func getClient() (*client.Client, error) {
 	client.RandomProcessWid = strconv.FormatInt(rand.Int63(), 32)
 
 	srv := client.DefaultServer()
-	srv.Address = "localhost:7416"
+	srv.Address = "localhost:7414"
 	cl, err := client.Dial(srv, "123456")
 	if err != nil {
 		return nil, err
