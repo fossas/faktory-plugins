@@ -9,11 +9,13 @@ import (
 
 	"github.com/contribsys/faktory/cli"
 	"github.com/contribsys/faktory/client"
+	"github.com/contribsys/faktory/manager"
+	"github.com/contribsys/faktory/server"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestRetry(t *testing.T) {
-	withServer(func(cl *client.Client) {
+	withServer(func(s *server.Server, cl *client.Client) {
 		j1 := client.NewJob("JobOne", 1)
 		err := cl.Push(j1)
 		assert.Nil(t, err)
@@ -33,7 +35,41 @@ func TestRetry(t *testing.T) {
 	})
 }
 
-func withServer(runner func(cl *client.Client)) {
+func TestPushMiddleware(t *testing.T) {
+	withServer(func(s *server.Server, cl *client.Client) {
+		// Sentinel values
+		attr := "push_chain"
+		val := "hello world"
+
+		// Queue a job without any custom attributes being set
+		j1 := client.NewJob("JobOne", 1)
+		err := cl.Push(j1)
+		assert.Nil(t, err)
+		_, ok := j1.GetCustom(attr)
+		assert.False(t, ok)
+
+		// Add a PUSH middleware that will run when the job is RETRYd
+		// This sets the custom attribute
+		s.Manager().AddMiddleware("push", func(next func() error, ctx manager.Context) error {
+			ctx.Job().SetCustom(attr, val)
+			return next()
+		})
+
+		// Fetch and RETRY the job
+		cl.Fetch("default")
+		_, err = cl.Generic(fmt.Sprintf(`RETRY {"jid":%q}`, j1.Jid))
+		assert.Nil(t, err)
+
+		// Check that the middleware ran and added the custom attribute
+		j2, _ := cl.Fetch("default")
+		assert.Equal(t, j1.Jid, j2.Jid)
+		v, ok := j2.GetCustom(attr)
+		assert.True(t, ok)
+		assert.Equal(t, val, v)
+	})
+}
+
+func withServer(runner func(s *server.Server, cl *client.Client)) {
 	dir := "/tmp/retry_test.db"
 	defer os.RemoveAll(dir)
 
@@ -72,7 +108,7 @@ func withServer(runner func(cl *client.Client)) {
 	}
 	defer cl.Close()
 
-	runner(cl)
+	runner(s, cl)
 	close(s.Stopper())
 	s.Stop(nil)
 }

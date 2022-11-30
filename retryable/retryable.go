@@ -1,9 +1,13 @@
 package retryable
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"unsafe"
 
+	"github.com/contribsys/faktory/manager"
 	"github.com/contribsys/faktory/server"
 	"github.com/contribsys/faktory/util"
 )
@@ -54,12 +58,58 @@ func (r *RetryableSubsystem) retryCommand(c *server.Connection, s *server.Server
 		return
 	}
 
-	jdata, err := json.Marshal(job)
+	q, err := s.Store().GetQueue(job.Queue)
 	if err != nil {
 		_ = c.Error(cmd, err)
 		return
 	}
-	s.Manager().Redis().RPush(job.Queue, jdata)
+
+	mgr := s.Manager()
+	// Extract the PUSH middleware chain
+	rm := reflect.ValueOf(mgr).Elem()
+	rf := rm.FieldByName("pushChain")
+	rf = reflect.NewAt(rf.Type(), unsafe.Pointer(rf.UnsafeAddr())).Elem()
+	pushChain := rf.Interface().(manager.MiddlewareChain)
+	// Build a manager.Ctx
+	// We have to create new Values using pointers because reflect does not allow
+	// reading or setting unexported fields.
+	ctx := manager.Ctx{Context: context.Background()}
+	rctx := reflect.ValueOf(&ctx).Elem()
+	rjob := rctx.FieldByName("job")
+	rjob = reflect.NewAt(rjob.Type(), unsafe.Pointer(rjob.UnsafeAddr())).Elem()
+	rjob.Set(reflect.ValueOf(job))
+	rmgr := rctx.FieldByName("mgr")
+	rmgr = reflect.NewAt(rmgr.Type(), unsafe.Pointer(rmgr.UnsafeAddr())).Elem()
+	// s.Manager()'s type is the interface manager.Manager but we need a *manager.manager
+	// so we're getting the underlying value's address
+	rmgr.Set(reflect.ValueOf(mgr).Elem().Addr())
+
+	err = callMiddleware(pushChain, ctx, func() error {
+		job.EnqueuedAt = util.Nows()
+		jdata, err := json.Marshal(job)
+		if err != nil {
+			return err
+		}
+		s.Manager().Redis().RPush(q.Name(), jdata)
+		return nil
+	})
+	if err != nil {
+		_ = c.Error(cmd, err)
+		return
+	}
 
 	_ = c.Ok()
+}
+
+// Run the given job through the given middleware chain.
+// `final` is the function called if the entire chain passes the job along.
+// copied from `manager/middleware.go`
+func callMiddleware(chain manager.MiddlewareChain, ctx manager.Context, final func() error) error {
+	if len(chain) == 0 {
+		return final()
+	}
+
+	link := chain[0]
+	rest := chain[1:]
+	return link(func() error { return callMiddleware(rest, ctx, final) }, ctx)
 }
