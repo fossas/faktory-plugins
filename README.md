@@ -135,7 +135,7 @@ Jobs can be configured to automatically expire after a preset time has passed by
 
 ### Requeue Jobs
 
-Implements a `REQUEYE {"jid": "..."}` command that ACKs the given job and then immediately requeues it to the beginning of the queue. This can be useful if you need a worker to give up execution of a job without impacting the retry count, for example if the worker is scaling down.
+Implements a `REQUEUE {"jid": "..."}` command that ACKs the given job and then immediately requeues it to the beginning of the queue. This can be useful if you need a worker to give up execution of a job without impacting the retry count, for example if the worker is scaling down.
 
 ## License
 
