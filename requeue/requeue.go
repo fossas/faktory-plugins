@@ -21,7 +21,7 @@ type RequeueSubsystem struct{}
 // Start loads the plugin.
 func (r *RequeueSubsystem) Start(s *server.Server) error {
 	server.CommandSet["REQUEUE"] = r.requeueCommand
-	util.Info("Loaded the requeue jobs plugin")
+	util.Info("Loaded requeue jobs plugin")
 	return nil
 }
 

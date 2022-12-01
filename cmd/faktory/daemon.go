@@ -13,7 +13,7 @@ import (
 	"github.com/fossas/faktory-plugins/cron"
 	"github.com/fossas/faktory-plugins/expire"
 	"github.com/fossas/faktory-plugins/metrics"
-	"github.com/fossas/faktory-plugins/retryable"
+	"github.com/fossas/faktory-plugins/requeue"
 	"github.com/fossas/faktory-plugins/uniq"
 )
 
@@ -59,7 +59,7 @@ func main() {
 	s.Register(new(cron.CronSubsystem))
 	s.Register(new(batch.BatchSubsystem))
 	s.Register(new(expire.ExpireSubsystem))
-	s.Register(new(retryable.RetryableSubsystem))
+	s.Register(new(requeue.RequeueSubsystem))
 	go cli.HandleSignals(s)
 
 	go func() {
