@@ -1,4 +1,4 @@
-package retryable
+package requeue
 
 import (
 	"fmt"
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestRetry(t *testing.T) {
+func TestRequeue(t *testing.T) {
 	withServer(func(s *server.Server, cl *client.Client) {
 		j1 := client.NewJob("JobOne", 1)
 		err := cl.Push(j1)
@@ -25,11 +25,12 @@ func TestRetry(t *testing.T) {
 		assert.Nil(t, err)
 
 		job, _ := cl.Fetch("default")
-		_, err = cl.Generic(fmt.Sprintf(`RETRY {"jid":%q}`, job.Jid))
+		_, err = cl.Generic(fmt.Sprintf(`REQUEUE {"jid":%q}`, job.Jid))
 		assert.Nil(t, err)
 
-		// j2 would be at the front of the queue if j1 had ACKed, so if the fetched
-		// job is j1 then RETRY successfully put j1 at the front of the queue.
+		// j2 would be at the front of the queue if j1 had ACKed without REQUEUE, so
+		// if the fetched job is j1 then REQUEUE successfully put j1 at the front of
+		// the queue.
 		job, _ = cl.Fetch("default")
 		assert.Equal(t, j1.Jid, job.Jid)
 	})
@@ -48,16 +49,16 @@ func TestPushMiddleware(t *testing.T) {
 		_, ok := j1.GetCustom(attr)
 		assert.False(t, ok)
 
-		// Add a PUSH middleware that will run when the job is RETRYd
+		// Add a PUSH middleware that will run when the job is REQUEUEd
 		// This sets the custom attribute
 		s.Manager().AddMiddleware("push", func(next func() error, ctx manager.Context) error {
 			ctx.Job().SetCustom(attr, val)
 			return next()
 		})
 
-		// Fetch and RETRY the job
+		// Fetch and REQUEUE the job
 		cl.Fetch("default")
-		_, err = cl.Generic(fmt.Sprintf(`RETRY {"jid":%q}`, j1.Jid))
+		_, err = cl.Generic(fmt.Sprintf(`REQUEUE {"jid":%q}`, j1.Jid))
 		assert.Nil(t, err)
 
 		// Check that the middleware ran and added the custom attribute
@@ -70,12 +71,11 @@ func TestPushMiddleware(t *testing.T) {
 }
 
 func withServer(runner func(s *server.Server, cl *client.Client)) {
-	dir := "/tmp/retry_test.db"
+	dir := "/tmp/requeue_test.db"
 	defer os.RemoveAll(dir)
 
 	opts := &cli.CliOptions{
 		CmdBinding:       "localhost:7414",
-		WebBinding:       "localhost:7415",
 		Environment:      "development",
 		ConfigDirectory:  ".",
 		LogLevel:         "debug",
@@ -93,7 +93,7 @@ func withServer(runner func(s *server.Server, cl *client.Client)) {
 	if err != nil {
 		panic(err)
 	}
-	s.Register(new(RetryableSubsystem))
+	s.Register(new(RequeueSubsystem))
 
 	go func() {
 		err := s.Run()

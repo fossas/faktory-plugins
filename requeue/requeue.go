@@ -1,4 +1,4 @@
-package retryable
+package requeue
 
 import (
 	"context"
@@ -12,44 +12,45 @@ import (
 	"github.com/contribsys/faktory/util"
 )
 
-var _ server.Subsystem = &RetryableSubsystem{}
+var _ server.Subsystem = &RequeueSubsystem{}
 
-// RetryableSubsystem allows a client to indicate that it is not able to complete
+// RequeueSubsystem allows a client to indicate that it is not able to complete
 // the job and that it should be retried.
-type RetryableSubsystem struct{}
+type RequeueSubsystem struct{}
 
 // Start loads the plugin.
-func (r *RetryableSubsystem) Start(s *server.Server) error {
-	server.CommandSet["RETRY"] = r.retryCommand
-	util.Info("Loaded the retryable jobs plugin")
+func (r *RequeueSubsystem) Start(s *server.Server) error {
+	server.CommandSet["REQUEUE"] = r.requeueCommand
+	util.Info("Loaded the requeue jobs plugin")
 	return nil
 }
 
 // Name returns the name of the plugin.
-func (r *RetryableSubsystem) Name() string {
-	return "RetryableJobs"
+func (r *RequeueSubsystem) Name() string {
+	return "Requeue"
 }
 
 // Reload does not do anything.
-func (r *RetryableSubsystem) Reload(s *server.Server) error {
+func (r *RequeueSubsystem) Reload(s *server.Server) error {
 	return nil
 }
 
-// retryCommand implements the RETRY client command which simply ACKs and
-// requeues the job.
-// RETRY {"jid":"123456789"}
-func (r *RetryableSubsystem) retryCommand(c *server.Connection, s *server.Server, cmd string) {
-	data := cmd[6:]
+// requeueCommand implements the REQUEUE client command which
+// - ACKs the job
+// - Requeues the job to the _front_ of the queue
+// REQUEUE {"jid":"123456789"}
+func (r *RequeueSubsystem) requeueCommand(c *server.Connection, s *server.Server, cmd string) {
+	data := cmd[8:]
 
 	var hash map[string]string
 	err := json.Unmarshal([]byte(data), &hash)
 	if err != nil {
-		_ = c.Error(cmd, fmt.Errorf("invalid RETRY %s", data))
+		_ = c.Error(cmd, fmt.Errorf("invalid REQUEUE %s", data))
 		return
 	}
 	jid, ok := hash["jid"]
 	if !ok {
-		_ = c.Error(cmd, fmt.Errorf("invalid RETRY %s", data))
+		_ = c.Error(cmd, fmt.Errorf("invalid REQUEUE %s", data))
 		return
 	}
 	job, err := s.Manager().Acknowledge(jid)
