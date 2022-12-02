@@ -133,6 +133,10 @@ arguments for jobs can be passed using `args = [1,2,3]` or using `[[cron.job.arg
 
 Jobs can be configured to automatically expire after a preset time has passed by setting the `expires_at` custom attribute to an ISO8601 timestamp. Alternatively, you can set the `expires_in` custom attribute to a Golang Duration string to expire a job a given duration after it was enqueued.
 
+### Requeue Jobs
+
+Implements a `REQUEUE {"jid": "..."}` command that ACKs the given job and then immediately requeues it to the beginning of the queue. This can be useful if you need a worker to give up execution of a job without impacting the retry count, for example if the worker is scaling down.
+
 ## License
 
 All code in this repository is licensed under the AGPL.
