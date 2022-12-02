@@ -33,6 +33,12 @@ func TestRequeue(t *testing.T) {
 		// the queue.
 		job, _ = cl.Fetch("default")
 		assert.Equal(t, j1.Jid, job.Jid)
+		// Verify the j2 is next
+		job, _ = cl.Fetch("default")
+		assert.Equal(t, j2.Jid, job.Jid)
+		// Verify that the queue is empty
+		job, _ = cl.Fetch("default")
+		assert.Nil(t, job)
 	})
 }
 
