@@ -58,7 +58,7 @@ func (r *RequeueSubsystem) requeueCommand(c *server.Connection, s *server.Server
 		_ = c.Error(cmd, err)
 		return
 	}
-	// Acknowledge will not return a job (nor an error) if there's no in-memory
+	// s.Manager().Acknowledge() will return (nil, nil) if there's no in-memory
 	// reservation for the given jid.
 	if job == nil {
 		_ = c.Error(cmd, fmt.Errorf("requeue: Can't requeue job with no reservation"))
