@@ -94,7 +94,7 @@ func TestNoReservation(t *testing.T) {
 }
 
 func withServer(runner func(s *server.Server, cl *client.Client)) {
-	dir := "/tmp/requeue_test.db"
+	dir := fmt.Sprintf("/tmp/requeue_test_%d.db", rand.Int())
 	defer os.RemoveAll(dir)
 
 	opts := &cli.CliOptions{

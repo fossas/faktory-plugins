@@ -244,7 +244,7 @@ func createJob(queue string, jobtype string, args ...interface{}) *client.Job {
 }
 
 func runSystem(configDir string, runner func(s *server.Server, cl *client.Client)) {
-	dir := "/tmp/batching_system.db"
+	dir := fmt.Sprintf("/tmp/metrics_test_%d.db", rand.Int())
 	defer os.RemoveAll(dir)
 	opts := &cli.CliOptions{
 		CmdBinding:       "localhost:7418",

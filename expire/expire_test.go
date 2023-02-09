@@ -1,6 +1,7 @@
 package expire
 
 import (
+	"fmt"
 	"math/rand"
 	"os"
 	"strconv"
@@ -86,7 +87,7 @@ func TestRemovesExpiresIn(t *testing.T) {
 }
 
 func withServer(runner func(s *server.Server, cl *client.Client)) {
-	dir := "/tmp/requeue_test.db"
+	dir := fmt.Sprintf("/tmp/expire_test_%d.db", rand.Int())
 	defer os.RemoveAll(dir)
 
 	opts := &cli.CliOptions{
