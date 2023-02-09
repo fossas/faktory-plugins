@@ -76,6 +76,23 @@ func TestPushMiddleware(t *testing.T) {
 	})
 }
 
+func TestNoReservation(t *testing.T) {
+	withServer(func(s *server.Server, cl *client.Client) {
+		j1 := client.NewJob("JobOne", 1)
+		err := cl.Push(j1)
+		assert.Nil(t, err)
+
+		job, _ := cl.Fetch("default")
+
+		// Acknowledge the job so that `manager.clearReservation` is called
+		s.Manager().Acknowledge(job.Jid)
+
+		// Attempting to requeue should return an error
+		_, err = cl.Generic(fmt.Sprintf(`REQUEUE {"jid":%q}`, job.Jid))
+		assert.ErrorContains(t, err, "requeue: Can't requeue job with no reservation")
+	})
+}
+
 func withServer(runner func(s *server.Server, cl *client.Client)) {
 	dir := "/tmp/requeue_test.db"
 	defer os.RemoveAll(dir)
