@@ -76,12 +76,29 @@ func TestPushMiddleware(t *testing.T) {
 	})
 }
 
+func TestNoReservation(t *testing.T) {
+	withServer(func(s *server.Server, cl *client.Client) {
+		j1 := client.NewJob("JobOne", 1)
+		err := cl.Push(j1)
+		assert.Nil(t, err)
+
+		job, _ := cl.Fetch("default")
+
+		// Acknowledge the job so that `manager.clearReservation` is called
+		s.Manager().Acknowledge(job.Jid)
+
+		// Attempting to requeue should return an error
+		_, err = cl.Generic(fmt.Sprintf(`REQUEUE {"jid":%q}`, job.Jid))
+		assert.ErrorContains(t, err, "requeue: Can't requeue job with no reservation")
+	})
+}
+
 func withServer(runner func(s *server.Server, cl *client.Client)) {
-	dir := "/tmp/requeue_test.db"
+	dir := fmt.Sprintf("/tmp/requeue_test_%d.db", rand.Int())
 	defer os.RemoveAll(dir)
 
 	opts := &cli.CliOptions{
-		CmdBinding:       "localhost:7414",
+		CmdBinding:       "localhost:7412",
 		Environment:      "development",
 		ConfigDirectory:  ".",
 		LogLevel:         "debug",
@@ -124,7 +141,7 @@ func getClient() (*client.Client, error) {
 	client.RandomProcessWid = strconv.FormatInt(rand.Int63(), 32)
 
 	srv := client.DefaultServer()
-	srv.Address = "localhost:7414"
+	srv.Address = "localhost:7412"
 	cl, err := client.Dial(srv, "123456")
 	if err != nil {
 		return nil, err

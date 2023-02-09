@@ -424,7 +424,6 @@ func withServer(batchSystem *BatchSubsystem, enabled bool, runner func(cl *clien
 	defer os.RemoveAll(dir)
 	opts := &cli.CliOptions{
 		CmdBinding:       "localhost:7416",
-		WebBinding:       "localhost:7420",
 		Environment:      "development",
 		ConfigDirectory:  ".",
 		LogLevel:         "debug",
@@ -458,10 +457,10 @@ func withServer(batchSystem *BatchSubsystem, enabled bool, runner func(cl *clien
 	}()
 
 	cl, err := getClient()
-	defer cl.Close()
 	if err != nil {
 		panic(err)
 	}
+	defer cl.Close()
 
 	runner(cl)
 	close(s.Stopper())

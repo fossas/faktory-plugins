@@ -66,6 +66,7 @@ func (e *ExpireSubsystem) parseExpiration(next func() error, ctx manager.Context
 			return fmt.Errorf("expire: Could not parse expires_in: %w", err)
 		}
 		ctx.Job().SetExpiresIn(duration)
+		delete(ctx.Job().Custom, "expires_in")
 	}
 
 	return next()
