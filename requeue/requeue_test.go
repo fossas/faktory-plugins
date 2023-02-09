@@ -98,7 +98,7 @@ func withServer(runner func(s *server.Server, cl *client.Client)) {
 	defer os.RemoveAll(dir)
 
 	opts := &cli.CliOptions{
-		CmdBinding:       "localhost:7414",
+		CmdBinding:       "localhost:7412",
 		Environment:      "development",
 		ConfigDirectory:  ".",
 		LogLevel:         "debug",
@@ -141,7 +141,7 @@ func getClient() (*client.Client, error) {
 	client.RandomProcessWid = strconv.FormatInt(rand.Int63(), 32)
 
 	srv := client.DefaultServer()
-	srv.Address = "localhost:7414"
+	srv.Address = "localhost:7412"
 	cl, err := client.Dial(srv, "123456")
 	if err != nil {
 		return nil, err

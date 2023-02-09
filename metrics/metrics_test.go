@@ -248,7 +248,6 @@ func runSystem(configDir string, runner func(s *server.Server, cl *client.Client
 	defer os.RemoveAll(dir)
 	opts := &cli.CliOptions{
 		CmdBinding:       "localhost:7418",
-		WebBinding:       "localhost:7420",
 		Environment:      "development",
 		ConfigDirectory:  configDir,
 		LogLevel:         "debug",
