@@ -34,7 +34,6 @@ type Options struct {
 
 // Start starts the subsystem
 // get options from global config "[metrics]"
-//
 func (m *MetricsSubsystem) Start(s *server.Server) error {
 	m.Server = s
 	m.Options = m.getOptions(s)
@@ -45,7 +44,7 @@ func (m *MetricsSubsystem) Start(s *server.Server) error {
 
 	if err := m.createStatsDClient(); err != nil {
 		util.Warnf("Unable to create statsD client: %v", err)
-		return fmt.Errorf("Unable to create statsD client")
+		return fmt.Errorf("unable to create statsD client")
 	}
 	// submit metrics every 30 seconds
 	m.Server.AddTask(30, &metricsTask{m})
@@ -69,7 +68,7 @@ func (m *MetricsSubsystem) Reload(s *server.Server) error {
 // Shutdown - nothing needs to be done but the function must exist for subsystems
 func (m *MetricsSubsystem) Shutdown(s *server.Server) error {
 	if err := m.StatsDClient().Close(); err != nil {
-		return fmt.Errorf("Unable to close statsd client: %v", err)
+		return fmt.Errorf("unable to close statsd client: %v", err)
 	}
 
 	return nil

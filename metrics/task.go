@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -23,37 +24,37 @@ func (m *metricsTask) Name() string {
 }
 
 // Execute - runs the task to collect metrics
-func (m *metricsTask) Execute() error {
+func (m *metricsTask) Execute(ctx context.Context) error {
 	go func() {
 		connectionCount := m.Subsystem.Server.Stats.Connections
 		if err := m.Subsystem.StatsDClient().Gauge(m.Subsystem.PrefixMetricName("connections.count"), float64(connectionCount), m.Subsystem.Options.Tags, 1); err != nil {
 			util.Warnf("unable to submit metric: %v", err)
 		}
 
-		workingCount := m.Subsystem.Server.Store().Working().Size()
+		workingCount := m.Subsystem.Server.Store().Working().Size(ctx)
 		if err := m.Subsystem.StatsDClient().Gauge(m.Subsystem.PrefixMetricName("working.count"), float64(workingCount), m.Subsystem.Options.Tags, 1); err != nil {
 			util.Warnf("unable to submit metric: %v", err)
 		}
 
-		scheduledCount := m.Subsystem.Server.Store().Scheduled().Size()
+		scheduledCount := m.Subsystem.Server.Store().Scheduled().Size(ctx)
 		if err := m.Subsystem.StatsDClient().Gauge(m.Subsystem.PrefixMetricName("scheduled.count"), float64(scheduledCount), m.Subsystem.Options.Tags, 1); err != nil {
 			util.Warnf("unable to submit metric: %v", err)
 		}
 
-		retriesCount := m.Subsystem.Server.Store().Retries().Size()
+		retriesCount := m.Subsystem.Server.Store().Retries().Size(ctx)
 		if err := m.Subsystem.StatsDClient().Gauge(m.Subsystem.PrefixMetricName("retries.count"), float64(retriesCount), m.Subsystem.Options.Tags, 1); err != nil {
 			util.Warnf("unable to submit metric: %v", err)
 		}
 
-		deadCount := m.Subsystem.Server.Store().Dead().Size()
+		deadCount := m.Subsystem.Server.Store().Dead().Size(ctx)
 		if err := m.Subsystem.StatsDClient().Gauge(m.Subsystem.PrefixMetricName("dead.count"), float64(deadCount), m.Subsystem.Options.Tags, 1); err != nil {
 			util.Warnf("unable to submit metric: %v", err)
 		}
 
 		var totalEnqueued uint64 = 0
 
-		m.Subsystem.Server.Store().EachQueue(func(queue storage.Queue) {
-			count := queue.Size()
+		m.Subsystem.Server.Store().EachQueue(ctx, func(queue storage.Queue) {
+			count := queue.Size(ctx)
 			totalEnqueued += count
 			queueCountMetricName := m.Subsystem.PrefixMetricName(fmt.Sprintf("enqueued.%s.count", queue.Name()))
 			if err := m.Subsystem.StatsDClient().Gauge(queueCountMetricName, float64(count), m.Subsystem.Options.Tags, 1); err != nil {
@@ -67,7 +68,7 @@ func (m *metricsTask) Execute() error {
 			// start is the offset from the left of the queue
 			// count is not the number of items to fetch, but rather the offset to the last item to return
 			// Jobs are LPUSH'd into the queue and RPOP'd out, so to get the last job we want -1, -1
-			queue.Page(-1, 0, func(_ int, data []byte) error {
+			queue.Page(ctx, -1, 0, func(_ int, data []byte) error {
 				var job client.Job
 				if err := json.Unmarshal(data, &job); err != nil {
 					util.Warnf("metrics task unable to unmarshal job data: %v", err)
@@ -79,7 +80,7 @@ func (m *metricsTask) Execute() error {
 					util.Warnf("metrics task unable to parse EnqueuedAt: %v", err)
 					return nil
 				}
-				timeElapsed = time.Duration(time.Now().Sub(t))
+				timeElapsed = time.Duration(time.Since(t))
 
 				return nil
 			})
@@ -104,7 +105,7 @@ func (m *metricsTask) Execute() error {
 
 // Stats - this is required but there are no useful stats to record for metrics
 // so return an empty map
-func (s *metricsTask) Stats() map[string]interface{} {
+func (s *metricsTask) Stats(ctx context.Context) map[string]interface{} {
 	// no stats
 	return map[string]interface{}{}
 }
