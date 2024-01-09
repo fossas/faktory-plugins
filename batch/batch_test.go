@@ -1,6 +1,7 @@
 package batch
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -17,6 +18,8 @@ import (
 
 func TestBatchSuccess(t *testing.T) {
 	batchSystem := new(BatchSubsystem)
+	ctx := context.Background()
+
 	withServer(batchSystem, true, func(cl *client.Client) {
 		b := client.NewBatch(cl)
 
@@ -35,7 +38,7 @@ func TestBatchSuccess(t *testing.T) {
 		assert.NotEqual(t, "", b.Bid)
 
 		time.Sleep(1 * time.Second)
-		batchData, err := batchSystem.batchManager.getBatch(b.Bid)
+		batchData, err := batchSystem.batchManager.getBatch(ctx, b.Bid)
 		assert.Nil(t, err)
 		assert.Equal(t, 2, batchData.Meta.Total)
 
@@ -76,7 +79,7 @@ func TestBatchSuccess(t *testing.T) {
 		fetchedJob, err := cl.Fetch("default")
 		assert.Nil(t, fetchedJob)
 
-		_, err = batchSystem.batchManager.getBatch(b.Bid)
+		_, err = batchSystem.batchManager.getBatch(ctx, b.Bid)
 
 		// ensure batch is removed
 		assert.Error(t, err)
@@ -86,6 +89,8 @@ func TestBatchSuccess(t *testing.T) {
 
 func TestBatchSuccessWithoutSuccessCallback(t *testing.T) {
 	batchSystem := new(BatchSubsystem)
+	ctx := context.Background()
+
 	withServer(batchSystem, true, func(cl *client.Client) {
 		b := client.NewBatch(cl)
 
@@ -103,7 +108,7 @@ func TestBatchSuccessWithoutSuccessCallback(t *testing.T) {
 		assert.NotEqual(t, "", b.Bid)
 
 		time.Sleep(1 * time.Second)
-		batchData, err := batchSystem.batchManager.getBatch(b.Bid)
+		batchData, err := batchSystem.batchManager.getBatch(ctx, b.Bid)
 		assert.Nil(t, err)
 		assert.Equal(t, 2, batchData.Meta.Total)
 
@@ -137,7 +142,7 @@ func TestBatchSuccessWithoutSuccessCallback(t *testing.T) {
 		fetchedJob, err := cl.Fetch("default")
 		assert.Nil(t, fetchedJob)
 
-		_, err = batchSystem.batchManager.getBatch(b.Bid)
+		_, err = batchSystem.batchManager.getBatch(ctx, b.Bid)
 
 		// ensure batch is removed
 		assert.Error(t, err)
@@ -147,6 +152,8 @@ func TestBatchSuccessWithoutSuccessCallback(t *testing.T) {
 
 func TestBatchCompleteAndEventualSuccess(t *testing.T) {
 	batchSystem := new(BatchSubsystem)
+	ctx := context.Background()
+
 	withServer(batchSystem, true, func(cl *client.Client) {
 		b := client.NewBatch(cl)
 
@@ -166,7 +173,7 @@ func TestBatchCompleteAndEventualSuccess(t *testing.T) {
 		assert.Nil(t, err)
 		assert.NotEqual(t, "", b.Bid)
 
-		batchData, err := batchSystem.batchManager.getBatch(b.Bid)
+		batchData, err := batchSystem.batchManager.getBatch(ctx, b.Bid)
 		assert.Nil(t, err)
 		assert.Equal(t, 2, batchData.Meta.Total)
 		assert.Equal(t, 2, batchData.Meta.Pending)
@@ -202,7 +209,7 @@ func TestBatchCompleteAndEventualSuccess(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, fetchedJob)
 
-		_, err = batchSystem.Server.Manager().RetryJobs(time.Now().Add(60 * time.Second))
+		_, err = batchSystem.Server.Manager().RetryJobs(ctx, time.Now().Add(60*time.Second))
 		assert.Nil(t, err)
 
 		// job two retry #1 fail
@@ -214,7 +221,7 @@ func TestBatchCompleteAndEventualSuccess(t *testing.T) {
 		assert.Equal(t, 2, batchData.Meta.Failed)
 		assert.Equal(t, 0, batchData.Meta.Pending)
 
-		_, err = batchSystem.Server.Manager().RetryJobs(time.Now().Add(60 * time.Second))
+		_, err = batchSystem.Server.Manager().RetryJobs(ctx, time.Now().Add(60*time.Second))
 		assert.Nil(t, err)
 
 		// job two retry #2 success
@@ -235,6 +242,8 @@ func TestBatchCompleteAndEventualSuccess(t *testing.T) {
 
 func TestBatchReopen(t *testing.T) {
 	batchSystem := new(BatchSubsystem)
+	ctx := context.Background()
+
 	withServer(batchSystem, true, func(cl *client.Client) {
 		b := client.NewBatch(cl)
 
@@ -248,7 +257,7 @@ func TestBatchReopen(t *testing.T) {
 		assert.Nil(t, err)
 		assert.NotEqual(t, "", b.Bid)
 
-		batchData, err := batchSystem.batchManager.getBatch(b.Bid)
+		batchData, err := batchSystem.batchManager.getBatch(ctx, b.Bid)
 		assert.True(t, batchData.Meta.Committed)
 
 		// job one
@@ -285,6 +294,8 @@ func TestBatchReopen(t *testing.T) {
 
 func TestBatchCannotOpen(t *testing.T) {
 	batchSystem := new(BatchSubsystem)
+	ctx := context.Background()
+
 	withServer(batchSystem, true, func(cl *client.Client) {
 		b := client.NewBatch(cl)
 
@@ -298,7 +309,7 @@ func TestBatchCannotOpen(t *testing.T) {
 		assert.Nil(t, err)
 		assert.NotEqual(t, "", b.Bid)
 
-		batchData, err := batchSystem.batchManager.getBatch(b.Bid)
+		batchData, err := batchSystem.batchManager.getBatch(ctx, b.Bid)
 		assert.True(t, batchData.Meta.Committed)
 
 		// job one
@@ -314,6 +325,8 @@ func TestBatchCannotOpen(t *testing.T) {
 
 func TestBatchLoadBatches(t *testing.T) {
 	batchSystem := new(BatchSubsystem)
+	ctx := context.Background()
+
 	withServer(batchSystem, true, func(cl *client.Client) {
 		b := client.NewBatch(cl)
 
@@ -338,11 +351,11 @@ func TestBatchLoadBatches(t *testing.T) {
 		processJob(cl, true, nil)
 		processJob(cl, false, nil)
 		batchSystem.batchManager.Batches = make(map[string]*batch)
-		_, err = batchSystem.batchManager.getBatch(b.Bid)
+		_, err = batchSystem.batchManager.getBatch(ctx, b.Bid)
 		assert.EqualError(t, err, "getBatch: no batch found")
-		err = batchSystem.batchManager.loadExistingBatches()
+		err = batchSystem.batchManager.loadExistingBatches(ctx)
 		assert.Nil(t, err)
-		batchData, err := batchSystem.batchManager.getBatch(b.Bid)
+		batchData, err := batchSystem.batchManager.getBatch(ctx, b.Bid)
 		assert.Nil(t, err)
 		assert.Equal(t, 4, batchData.Meta.Total)
 		assert.Equal(t, 1, batchData.Meta.Failed)
@@ -384,20 +397,21 @@ func TestBatchBatchWithoutCallbacks(t *testing.T) {
 
 func TestRemoveStaleBatches(t *testing.T) {
 	batchSystem := new(BatchSubsystem)
+	ctx := context.Background()
 
 	withServer(batchSystem, true, func(cl *client.Client) {
 		committedBatchId := fmt.Sprintf("b-%s", util.RandomJid())
 		meta := batchSystem.batchManager.newBatchMeta("testing", "", "", nil)
 		meta.CreatedAt = time.Now().UTC().Add(-time.Duration(1)*time.Minute).AddDate(0, 0, -batchSystem.Options.CommittedTimeoutDays).Format(time.RFC3339Nano)
-		batch, err := batchSystem.batchManager.newBatch(committedBatchId, meta)
+		batch, err := batchSystem.batchManager.newBatch(ctx, committedBatchId, meta)
 		assert.Nil(t, err)
-		err = batchSystem.batchManager.commit(batch)
+		err = batchSystem.batchManager.commit(ctx, batch)
 		assert.Nil(t, err)
 
 		uncommittedBatchId := fmt.Sprintf("b-%s", util.RandomJid())
 		uncommittedMeta := batchSystem.batchManager.newBatchMeta("testing", "", "", nil)
 		uncommittedMeta.CreatedAt = time.Now().UTC().Add(-time.Duration(batchSystem.Options.UncommittedTimeoutMinutes+1) * time.Minute).UTC().Format(time.RFC3339Nano)
-		_, err = batchSystem.batchManager.newBatch(uncommittedBatchId, uncommittedMeta)
+		_, err = batchSystem.batchManager.newBatch(ctx, uncommittedBatchId, uncommittedMeta)
 		assert.Nil(t, err)
 
 		batchSystem.batchManager.lockBatchIfExists(uncommittedBatchId)
@@ -408,13 +422,13 @@ func TestRemoveStaleBatches(t *testing.T) {
 			time.Sleep(1)
 			batchSystem.batchManager.unlockBatchIfExists(uncommittedBatchId)
 		}()
-		batchSystem.batchManager.removeStaleBatches()
+		batchSystem.batchManager.removeStaleBatches(ctx)
 
-		_, err = batchSystem.batchManager.getBatch(committedBatchId)
+		_, err = batchSystem.batchManager.getBatch(ctx, committedBatchId)
 		assert.EqualError(t, err, "getBatch: no batch found")
 
 		batchSystem.batchManager.lockBatchIfExists(uncommittedBatchId)
-		_, err = batchSystem.batchManager.getBatch(uncommittedBatchId)
+		_, err = batchSystem.batchManager.getBatch(ctx, uncommittedBatchId)
 		assert.EqualError(t, err, "getBatch: no batch found")
 	})
 }

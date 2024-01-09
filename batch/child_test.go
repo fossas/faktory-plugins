@@ -1,15 +1,19 @@
 package batch
 
 import (
+	"context"
 	"fmt"
-	"github.com/contribsys/faktory/client"
-	"github.com/stretchr/testify/assert"
 	"sync"
 	"testing"
+
+	"github.com/contribsys/faktory/client"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestChildBatch(t *testing.T) {
 	batchSystem := new(BatchSubsystem)
+	ctx := context.Background()
+
 	t.Run("Nested children", func(t *testing.T) {
 		withServer(batchSystem, true, func(cl *client.Client) {
 			var batchA *client.Batch
@@ -51,7 +55,7 @@ func TestChildBatch(t *testing.T) {
 				return nil
 			})
 			assert.Nil(t, err)
-			batchData, err := batchSystem.batchManager.getBatch(b.Bid)
+			batchData, err := batchSystem.batchManager.getBatch(ctx, b.Bid)
 			assert.Nil(t, err)
 			assert.Len(t, batchData.Children, 2)
 
@@ -256,13 +260,15 @@ func TestChildBatch(t *testing.T) {
 			assert.Nil(t, err)
 
 			// batch A1 and B1 have not been committed as this point
-			assert.Equal(t, uint64(0), batchSystem.Server.Store().Scheduled().Size())
-			def, _ := batchSystem.Server.Store().GetQueue("default")
-			assert.Equal(t, uint64(0), def.Size())
+			assert.Equal(t, uint64(0), batchSystem.Server.Store().Scheduled().Size(ctx))
+			def, _ := batchSystem.Server.Store().GetQueue(ctx, "default")
+			assert.Equal(t, uint64(0), def.Size(ctx))
 		})
 	})
 
 	t.Run("Set child depth", func(t *testing.T) {
+		ctx := context.Background()
+
 		withServer(batchSystem, true, func(cl *client.Client) {
 			var batchA *client.Batch
 			var batchB *client.Batch
@@ -300,7 +306,7 @@ func TestChildBatch(t *testing.T) {
 				return nil
 			})
 			assert.Nil(t, err)
-			batchData, err := batchSystem.batchManager.getBatch(b.Bid)
+			batchData, err := batchSystem.batchManager.getBatch(ctx, b.Bid)
 			assert.Nil(t, err)
 			assert.Len(t, batchData.Children, 2)
 			depth := 1
@@ -380,9 +386,9 @@ func TestChildBatch(t *testing.T) {
 				assert.Equal(t, "batchSuccess", job.Type)
 			})
 			assert.Nil(t, err)
-			assert.Equal(t, uint64(0), batchSystem.Server.Store().Scheduled().Size())
-			def, _ := batchSystem.Server.Store().GetQueue("default")
-			assert.Equal(t, uint64(0), def.Size())
+			assert.Equal(t, uint64(0), batchSystem.Server.Store().Scheduled().Size(ctx))
+			def, _ := batchSystem.Server.Store().GetQueue(ctx, "default")
+			assert.Equal(t, uint64(0), def.Size(ctx))
 		})
 	})
 
@@ -431,11 +437,11 @@ func TestChildBatch(t *testing.T) {
 				return nil
 			})
 			assert.Nil(t, err)
-			topBatch, err := batchSystem.batchManager.getBatch(b.Bid)
+			topBatch, err := batchSystem.batchManager.getBatch(ctx, b.Bid)
 			assert.Nil(t, err)
 			assert.Len(t, topBatch.Children, 1)
 
-			topBatch2, err := batchSystem.batchManager.getBatch(b2.Bid)
+			topBatch2, err := batchSystem.batchManager.getBatch(ctx, b2.Bid)
 			assert.Nil(t, err)
 			assert.Len(t, topBatch2.Children, 2)
 			// build A

@@ -1,6 +1,7 @@
 package batch
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -18,6 +19,7 @@ import (
 
 func TestBatchStress(t *testing.T) {
 	batchSystem := new(BatchSubsystem)
+	ctx := context.Background()
 	dir := "/tmp/batching_stress_test.db"
 	defer os.RemoveAll(dir)
 	opts := &cli.CliOptions{
@@ -75,17 +77,17 @@ func TestBatchStress(t *testing.T) {
 	}
 	wg.Wait()
 	currentCount := 0
-	assert.EqualValues(t, 2*total*waitGroups, int(s.Store().TotalProcessed()))
+	assert.EqualValues(t, 2*total*waitGroups, int(s.Store().TotalProcessed(ctx)))
 	for i := 0; i < waitGroups; i++ {
-		q, err := s.Store().GetQueue(fmt.Sprintf("default-%d", i))
+		q, err := s.Store().GetQueue(ctx, fmt.Sprintf("default-%d", i))
 		assert.Nil(t, err)
-		currentCount += int(q.Size())
+		currentCount += int(q.Size(ctx))
 	}
 
 	assert.EqualValues(t, 0, currentCount)
-	batchQueue, err := s.Store().GetQueue("batch_load_complete")
+	batchQueue, err := s.Store().GetQueue(ctx, "batch_load_complete")
 	assert.Nil(t, err)
-	assert.EqualValues(t, waitGroups*total, int(batchQueue.Size()))
+	assert.EqualValues(t, waitGroups*total, int(batchQueue.Size(ctx)))
 	close(s.Stopper())
 	s.Stop(nil)
 }
