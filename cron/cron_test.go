@@ -1,6 +1,7 @@
 package cron
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -225,6 +226,7 @@ func TestCron(t *testing.T) {
 
 	t.Run("creates multiple cron jobs", func(t *testing.T) {
 		system := new(CronSubsystem)
+		ctx := context.Background()
 		configDir := createConfigDir(t)
 
 		runSystem(configDir, func(s *server.Server) {
@@ -254,15 +256,15 @@ func TestCron(t *testing.T) {
 			entries[0].Job.Run()
 			entries[1].Job.Run()
 
-			queue, err := system.Server.Store().GetQueue("default")
+			queue, err := system.Server.Store().GetQueue(ctx, "default")
 			assert.Nil(t, err)
-			assert.Equal(t, uint64(2), queue.Size())
+			assert.Equal(t, uint64(2), queue.Size(ctx))
 
-			jobOne, err := system.Server.Manager().Fetch(nil, "", "default")
+			jobOne, err := system.Server.Manager().Fetch(ctx, "", "default")
 			assert.Nil(t, err)
 			assert.Equal(t, "test_job", jobOne.Type)
 
-			jobTwo, err := system.Server.Manager().Fetch(nil, "", "default")
+			jobTwo, err := system.Server.Manager().Fetch(ctx, "", "default")
 			assert.Nil(t, err)
 			assert.Equal(t, "test_job_2", jobTwo.Type)
 		})
