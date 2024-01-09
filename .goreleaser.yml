@@ -10,12 +10,9 @@ builds:
     goos:
       - linux
       - darwin
-archives:
-  - replacements:
-      darwin: Darwin
-      linux: Linux
-      386: i386
-      amd64: x86_64
+    goarch:
+      - amd64
+      - arm64
 checksum:
   name_template: 'checksums.txt'
 snapshot:
@@ -28,4 +25,20 @@ changelog:
       - '^test:'
 dockers:
   - image_templates:
-    - quay.io/fossa/faktory:{{ .Tag }}
+    - quay.io/fossa/faktory:{{ .Tag }}-amd64
+    use: buildx
+    build_flag_templates:
+      - '--pull'
+      - '--platform=linux/amd64'
+  - image_templates:
+    - quay.io/fossa/faktory:{{ .Tag }}-arm64
+    use: buildx
+    build_flag_templates:
+      - '--pull'
+      - '--platform=linux/arm64'
+    goarch: arm64
+docker_manifests:
+  - name_template: quay.io/fossa/faktory:{{ .Tag }}
+    image_templates:
+      - quay.io/fossa/faktory:{{ .Tag }}-amd64
+      - quay.io/fossa/faktory:{{ .Tag }}-arm64
