@@ -1,6 +1,7 @@
 package requeue
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"os"
@@ -57,26 +58,34 @@ func TestPushMiddleware(t *testing.T) {
 
 		// Add a PUSH middleware that will run when the job is REQUEUEd
 		// This sets the custom attribute
-		s.Manager().AddMiddleware("push", func(next func() error, ctx manager.Context) error {
-			ctx.Job().SetCustom(attr, val)
+		s.Manager().AddMiddleware("push", func(ctx context.Context, next func() error) error {
+			mh := ctx.Value(manager.MiddlewareHelperKey).(manager.Context)
+			mh.Job().SetCustom(attr, val)
 			return next()
 		})
 
 		// Fetch and REQUEUE the job
-		cl.Fetch("default")
+		j2, _ := cl.Fetch("default")
+		// Verify that the custom attribute has not been set
+		_, ok = j2.GetCustom(attr)
+		assert.False(t, ok)
+
+		// Requeue the job
 		_, err = cl.Generic(fmt.Sprintf(`REQUEUE {"jid":%q}`, j1.Jid))
 		assert.Nil(t, err)
 
 		// Check that the middleware ran and added the custom attribute
-		j2, _ := cl.Fetch("default")
-		assert.Equal(t, j1.Jid, j2.Jid)
-		v, ok := j2.GetCustom(attr)
+		j3, _ := cl.Fetch("default")
+		assert.Equal(t, j1.Jid, j3.Jid)
+		v, ok := j3.GetCustom(attr)
 		assert.True(t, ok)
 		assert.Equal(t, val, v)
 	})
 }
 
 func TestNoReservation(t *testing.T) {
+	ctx := context.Background()
+
 	withServer(func(s *server.Server, cl *client.Client) {
 		j1 := client.NewJob("JobOne", 1)
 		err := cl.Push(j1)
@@ -85,7 +94,7 @@ func TestNoReservation(t *testing.T) {
 		job, _ := cl.Fetch("default")
 
 		// Acknowledge the job so that `manager.clearReservation` is called
-		s.Manager().Acknowledge(job.Jid)
+		s.Manager().Acknowledge(ctx, job.Jid)
 
 		// Attempting to requeue should return an error
 		_, err = cl.Generic(fmt.Sprintf(`REQUEUE {"jid":%q}`, job.Jid))

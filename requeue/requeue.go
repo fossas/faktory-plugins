@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/manager"
 	"github.com/contribsys/faktory/server"
 	"github.com/contribsys/faktory/util"
@@ -53,7 +52,7 @@ func (r *RequeueSubsystem) requeueCommand(c *server.Connection, s *server.Server
 		_ = c.Error(cmd, fmt.Errorf("invalid REQUEUE %s", data))
 		return
 	}
-	job, err := s.Manager().Acknowledge(jid)
+	job, err := s.Manager().Acknowledge(c.Context, jid)
 	if err != nil {
 		_ = c.Error(cmd, err)
 		return
@@ -65,20 +64,20 @@ func (r *RequeueSubsystem) requeueCommand(c *server.Connection, s *server.Server
 		return
 	}
 
-	q, err := s.Store().GetQueue(job.Queue)
+	q, err := s.Store().GetQueue(c.Context, job.Queue)
 	if err != nil {
 		_ = c.Error(cmd, err)
 		return
 	}
 
 	pushChain := pushChain(s.Manager())
-	ctx := newMiddlewareCtx(context.Background(), job, s.Manager())
 	// Our final function in the middleware chain is based off of the
 	// manager.Push -> manager.enqueue -> redisQueue.Push implementation upstream.
-	// https://github.com/contribsys/faktory/blob/v1.6.2/manager/manager.go#L233
-	// https://github.com/contribsys/faktory/blob/v1.6.2/manager/manager.go#L254
-	// https://github.com/contribsys/faktory/blob/v1.6.2/storage/queue_redis.go#L104
-	err = callMiddleware(pushChain, ctx, func() error {
+	// https://github.com/contribsys/faktory/blob/v1.8.0/manager/manager.go#L222-L236
+	// https://github.com/contribsys/faktory/blob/v1.8.0/manager/manager.go#L251-L255
+	// https://github.com/contribsys/faktory/blob/v1.8.0/storage/queue_redis.go#L104
+	ctxh := context.WithValue(c.Context, manager.MiddlewareHelperKey, Ctx{job, s.Manager(), nil})
+	err = callMiddleware(ctxh, pushChain, func() error {
 		job.EnqueuedAt = util.Nows()
 		jdata, err := json.Marshal(job)
 		if err != nil {
@@ -86,7 +85,7 @@ func (r *RequeueSubsystem) requeueCommand(c *server.Connection, s *server.Server
 		}
 		// redisQueue.Push does an LPUSH and redisQueue.Pop does an RPOP, so to
 		// insert a job at the front of the queue we want to do an RPUSH.
-		s.Manager().Redis().RPush(q.Name(), jdata)
+		s.Manager().Redis().RPush(c.Context, q.Name(), jdata)
 		return nil
 	})
 	if err != nil {
@@ -99,15 +98,15 @@ func (r *RequeueSubsystem) requeueCommand(c *server.Connection, s *server.Server
 
 // callMiddleware runs the given job through the given middleware chain.
 // `final` is the function called if the entire chain passes the job along.
-// Copied from https://github.com/contribsys/faktory/blob/v1.6.2/manager/manager.go#L182
-func callMiddleware(chain manager.MiddlewareChain, ctx manager.Context, final func() error) error {
+// Copied from https://github.com/contribsys/faktory/blob/v1.8.0/manager/middleware.go#L59-L67
+func callMiddleware(ctx context.Context, chain manager.MiddlewareChain, final func() error) error {
 	if len(chain) == 0 {
 		return final()
 	}
 
 	link := chain[0]
 	rest := chain[1:]
-	return link(func() error { return callMiddleware(rest, ctx, final) }, ctx)
+	return link(ctx, func() error { return callMiddleware(ctx, rest, final) })
 }
 
 // pushChain pulls the PUSH middleware chain out of a manager.manager
@@ -117,27 +116,4 @@ func pushChain(mgr manager.Manager) manager.MiddlewareChain {
 	rf := rm.FieldByName("pushChain")
 	rf = reflect.NewAt(rf.Type(), rf.Addr().UnsafePointer()).Elem()
 	return rf.Interface().(manager.MiddlewareChain)
-}
-
-// newMiddlewareCtx builds a manager.Ctx.
-// https://github.com/contribsys/faktory/blob/v1.6.2/manager/middleware.go#L20
-// We need to use reflection here to set the job and mgr because they're
-// unexported fields that middlewares will expect to be set.
-// We need to create new Values for each field because reflect does not allow
-// reading or setting unexported fields.
-func newMiddlewareCtx(ctx context.Context, job *client.Job, mgr manager.Manager) manager.Ctx {
-	mctx := manager.Ctx{Context: ctx}
-	rmctx := reflect.ValueOf(&mctx).Elem()
-
-	rjob := rmctx.FieldByName("job")
-	rjob = reflect.NewAt(rjob.Type(), rjob.Addr().UnsafePointer()).Elem()
-	rjob.Set(reflect.ValueOf(job))
-
-	rmgr := rmctx.FieldByName("mgr")
-	rmgr = reflect.NewAt(rmgr.Type(), rmgr.Addr().UnsafePointer()).Elem()
-	// s.Manager()'s type is the interface manager.Manager but we need a *manager.manager
-	// so we're getting the underlying value's address.
-	rmgr.Set(reflect.ValueOf(mgr).Elem().Addr())
-
-	return mctx
 }
