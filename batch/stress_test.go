@@ -70,7 +70,7 @@ func TestBatchStress(t *testing.T) {
 		assert.Nil(t, err)
 		go func(queue string, cl *client.Client) {
 			createAndProcessBatches(cl, batches, depth, jobsPerBatch, queue)
-			log.Println(fmt.Sprintf("Processed %d total jobs and batches (count=%d, children=%d, depth=%d) in %v", total, batches, jobsPerBatch, depth, time.Since(start)))
+			log.Printf("Processed %d total jobs and batches (count=%d, children=%d, depth=%d) in %v\n", total, batches, jobsPerBatch, depth, time.Since(start))
 			cl.Close()
 			wg.Done()
 		}(fmt.Sprintf("default-%d", i), cl)
@@ -124,7 +124,7 @@ func createAndProcessBatches(cl *client.Client, count int, depth int, jobsPerBat
 		if time.Since(now) > 13*time.Second {
 			now = time.Now()
 			if _, err := cl.Beat(); err != nil {
-				fmt.Println(fmt.Sprintf("error beat: %v", err))
+				fmt.Printf("error beat: %v\n", err)
 			}
 		}
 		// first batch
@@ -144,7 +144,7 @@ func createAndProcessBatches(cl *client.Client, count int, depth int, jobsPerBat
 		}
 	}
 	if _, err := cl.Beat(); err != nil {
-		fmt.Println(fmt.Sprintf("error beat: %v", err))
+		fmt.Printf("error beat: %v\n", err)
 	}
 	now = time.Now()
 	currentCount := count * depth * jobsPerBatch
@@ -153,7 +153,7 @@ func createAndProcessBatches(cl *client.Client, count int, depth int, jobsPerBat
 		if time.Since(now) > 13*time.Second {
 			now = time.Now()
 			if _, err := cl.Beat(); err != nil {
-				fmt.Println(fmt.Sprintf("error beat: %v", err))
+				fmt.Printf("error beat: %v\n", err)
 			}
 		}
 		if err := processJobForBatch(cl, queue, runJob(cl, jobsPerBatch, depth, depth, queue)); err != nil {
@@ -165,7 +165,7 @@ func createAndProcessBatches(cl *client.Client, count int, depth int, jobsPerBat
 		if time.Since(now) > 13*time.Second {
 			now = time.Now()
 			if _, err := cl.Beat(); err != nil {
-				fmt.Println(fmt.Sprintf("error beat: %v", err))
+				fmt.Printf("error beat: %v\n", err)
 			}
 		}
 		if err := processJobForBatch(cl, "batch_load", nil); err != nil {

@@ -77,6 +77,7 @@ func TestBatchSuccess(t *testing.T) {
 		assert.Equal(t, "2", batchData.Meta.SuccessJobState)
 
 		fetchedJob, err := cl.Fetch("default")
+		assert.Nil(t, err)
 		assert.Nil(t, fetchedJob)
 
 		_, err = batchSystem.batchManager.getBatch(ctx, b.Bid)
@@ -140,6 +141,7 @@ func TestBatchSuccessWithoutSuccessCallback(t *testing.T) {
 		assert.Equal(t, "2", batchData.Meta.CompleteJobState)
 
 		fetchedJob, err := cl.Fetch("default")
+		assert.Nil(t, err)
 		assert.Nil(t, fetchedJob)
 
 		_, err = batchSystem.batchManager.getBatch(ctx, b.Bid)
@@ -234,6 +236,7 @@ func TestBatchCompleteAndEventualSuccess(t *testing.T) {
 		err = processJob(cl, true, func(job *client.Job) {
 			assert.Equal(t, "batchSuccess", job.Type)
 		})
+		assert.Nil(t, err)
 		fetchedJob, err = cl.Fetch("default")
 		assert.Nil(t, err)
 		assert.Nil(t, fetchedJob)
@@ -310,6 +313,7 @@ func TestBatchCannotOpen(t *testing.T) {
 		assert.NotEqual(t, "", b.Bid)
 
 		batchData, err := batchSystem.batchManager.getBatch(ctx, b.Bid)
+		assert.Nil(t, err)
 		assert.True(t, batchData.Meta.Committed)
 
 		// job one
@@ -416,10 +420,10 @@ func TestRemoveStaleBatches(t *testing.T) {
 
 		batchSystem.batchManager.lockBatchIfExists(uncommittedBatchId)
 		go func() {
-			time.Sleep(1)
+			time.Sleep(1000)
 			batchSystem.batchManager.unlockBatchIfExists(uncommittedBatchId)
 			batchSystem.batchManager.lockBatchIfExists(uncommittedBatchId)
-			time.Sleep(1)
+			time.Sleep(1000)
 			batchSystem.batchManager.unlockBatchIfExists(uncommittedBatchId)
 		}()
 		batchSystem.batchManager.removeStaleBatches(ctx)

@@ -36,6 +36,7 @@ func TestChildBatch(t *testing.T) {
 				batchA.Complete = client.NewJob("A.batchDone", 1, "string", 3)
 				batchA.Success = client.NewJob("A.batchSuccess", 2, "string", 4)
 				_, err = cl.BatchNew(batchA)
+				assert.Nil(t, err)
 				val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", b.Bid, batchA.Bid))
 				assert.Nil(t, err)
 				assert.Equal(t, val, "OK")
@@ -72,6 +73,7 @@ func TestChildBatch(t *testing.T) {
 					batchA1.Complete = client.NewJob("A.1.batchDone", 1, "string", 3)
 					batchA1.Success = client.NewJob("A.1.batchSuccess", 2, "string", 4)
 					_, err = cl.BatchNew(batchA1)
+					assert.Nil(t, err)
 					val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", batch.Bid, batchA1.Bid))
 					assert.Nil(t, err)
 					assert.Equal(t, val, "OK")
@@ -83,6 +85,7 @@ func TestChildBatch(t *testing.T) {
 				})
 				assert.Nil(t, err)
 			})
+			assert.Nil(t, err)
 
 			// job B depth 1
 			err = processJob(cl, true, func(job *client.Job) {
@@ -97,6 +100,7 @@ func TestChildBatch(t *testing.T) {
 					batchB1.Complete = client.NewJob("B.1.batchDone", 1, "string", 3)
 					batchB1.Success = client.NewJob("B.1.batchSuccess", 2, "string", 4)
 					_, err = cl.BatchNew(batchB1)
+					assert.Nil(t, err)
 					val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", batch.Bid, batchB1.Bid))
 					assert.Nil(t, err)
 					assert.Equal(t, val, "OK")
@@ -105,6 +109,7 @@ func TestChildBatch(t *testing.T) {
 				})
 				assert.Nil(t, err)
 			})
+			assert.Nil(t, err)
 
 			// job A.1 depth 2
 			err = processJob(cl, true, func(job *client.Job) {
@@ -119,6 +124,7 @@ func TestChildBatch(t *testing.T) {
 					batchC1.Complete = client.NewJob("C.1.batchDone", 1, "string", 3)
 					batchC1.Success = client.NewJob("C.1.batchSuccess", 2, "string", 4)
 					_, err = cl.BatchNew(batchC1)
+					assert.Nil(t, err)
 					val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", batch.Bid, batchC1.Bid))
 					assert.Nil(t, err)
 					assert.Equal(t, val, "OK")
@@ -127,6 +133,7 @@ func TestChildBatch(t *testing.T) {
 				})
 				assert.Nil(t, err)
 			})
+			assert.Nil(t, err)
 
 			// job B.1 depth 2
 			err = processJob(cl, true, func(job *client.Job) {
@@ -141,6 +148,7 @@ func TestChildBatch(t *testing.T) {
 					batchD1.Complete = client.NewJob("D.1.batchDone", 1, "string", 3)
 					batchD1.Success = client.NewJob("D.1.batchSuccess", 2, "string", 4)
 					_, err = cl.BatchNew(batchD1)
+					assert.Nil(t, err)
 					val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", batch.Bid, batchD1.Bid))
 					assert.Nil(t, err)
 					assert.Equal(t, val, "OK")
@@ -149,6 +157,7 @@ func TestChildBatch(t *testing.T) {
 				})
 				assert.Nil(t, err)
 			})
+			assert.Nil(t, err)
 
 			// job C.1 depth 3 relies on D
 			err = processJob(cl, true, func(job *client.Job) {
@@ -161,6 +170,7 @@ func TestChildBatch(t *testing.T) {
 				err = batch.Commit()
 				assert.Nil(t, err)
 			})
+			assert.Nil(t, err)
 
 			// job D.1 depth 3 from B.1 / depth 4 from C.1
 			err = processJob(cl, true, func(job *client.Job) {
@@ -174,6 +184,7 @@ func TestChildBatch(t *testing.T) {
 				err = batch.Commit()
 				assert.Nil(t, err)
 			})
+			assert.Nil(t, err)
 
 			assert.Nil(t, err)
 			assert.Equal(t, 2, batchData.Meta.Succeeded)
@@ -287,6 +298,7 @@ func TestChildBatch(t *testing.T) {
 				batchA.Complete = client.NewJob("A.batchDone", 1, "string", 3)
 				batchA.Success = client.NewJob("A.batchSuccess", 2, "string", 4)
 				_, err = cl.BatchNew(batchA)
+				assert.Nil(t, err)
 				val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", b.Bid, batchA.Bid))
 				assert.Nil(t, err)
 				assert.Equal(t, val, "OK")
@@ -325,6 +337,7 @@ func TestChildBatch(t *testing.T) {
 					batchA1.Complete = client.NewJob("A.1.batchDone", 1, "string", 3)
 					batchA1.Success = client.NewJob("A.1.batchSuccess", 2, "string", 4)
 					_, err = cl.BatchNew(batchA1)
+					assert.Nil(t, err)
 					val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", batch.Bid, batchA1.Bid))
 					assert.Nil(t, err)
 					assert.Equal(t, val, "OK")
@@ -333,6 +346,7 @@ func TestChildBatch(t *testing.T) {
 				})
 				assert.Nil(t, err)
 			})
+			assert.Nil(t, err)
 
 			// job B depth 1
 			err = processJob(cl, true, func(job *client.Job) {
@@ -406,6 +420,7 @@ func TestChildBatch(t *testing.T) {
 				batchA.Complete = client.NewJob("batchDone", 1, "string", 3)
 				batchA.Success = client.NewJob("batchSuccess", 2, "string", 4)
 				_, err = cl.BatchNew(batchA)
+				assert.Nil(t, err)
 				val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", b.Bid, batchA.Bid))
 				assert.Nil(t, err)
 				assert.Equal(t, val, "OK")
@@ -421,7 +436,8 @@ func TestChildBatch(t *testing.T) {
 
 			err = b2.Jobs(func() error {
 				val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", b2.Bid, batchA.Bid))
-
+				assert.Nil(t, err)
+				assert.Equal(t, val, "OK")
 				err = b2.Push(client.NewJob("B", 2))
 				assert.Nil(t, err)
 				batchB := client.NewBatch(cl)
@@ -446,6 +462,7 @@ func TestChildBatch(t *testing.T) {
 			assert.Len(t, topBatch2.Children, 2)
 			// build A
 			cl2, err := getClient()
+			assert.Nil(t, err)
 			defer cl2.Close()
 			assert.Nil(t, err)
 
