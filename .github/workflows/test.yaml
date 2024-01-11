@@ -8,6 +8,7 @@ jobs:
       matrix:
         go-version: [1.21.x]
         os: [ubuntu-latest, macos-latest]
+      fail-fast: false
 
     runs-on: ${{ matrix.os }}
 
