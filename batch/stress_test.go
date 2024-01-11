@@ -17,7 +17,7 @@ func TestBatchStress(t *testing.T) {
 	batchSystem := new(BatchSubsystem)
 	ctx := context.Background()
 
-	withServer([]server.Subsystem{batchSystem}, enableBatching, func(s *server.Server, cl *client.Client) {
+	withServer([]server.Subsystem{batchSystem}, enableBatching, func(s *server.Server, _ *client.Client) {
 		start := time.Now()
 
 		batches := 5
@@ -82,14 +82,7 @@ func runJob(cl *client.Client, jobsPerBatch int, depth int, currentDepth int, qu
 }
 
 func createAndProcessBatches(cl *client.Client, count int, depth int, jobsPerBatch int, queue string) {
-	now := time.Now()
 	for i := 0; i < count; i++ {
-		if time.Since(now) > 13*time.Second {
-			now = time.Now()
-			if _, err := cl.Beat(); err != nil {
-				fmt.Printf("error beat: %v\n", err)
-			}
-		}
 		// first batch
 		_, err := createBatch(cl, 1, queue)
 		if err != nil {
@@ -109,28 +102,15 @@ func createAndProcessBatches(cl *client.Client, count int, depth int, jobsPerBat
 	if _, err := cl.Beat(); err != nil {
 		fmt.Printf("error beat: %v\n", err)
 	}
-	now = time.Now()
 	currentCount := count * depth * jobsPerBatch
 	total := (count * depth * jobsPerBatch * jobsPerBatch) - currentCount + count
 	for i := 0; i < total; i++ {
-		if time.Since(now) > 13*time.Second {
-			now = time.Now()
-			if _, err := cl.Beat(); err != nil {
-				fmt.Printf("error beat: %v\n", err)
-			}
-		}
 		if err := processJobForBatch(cl, queue, runJob(cl, jobsPerBatch, depth, depth, queue)); err != nil {
 			fmt.Println(err)
 			return
 		}
 	}
 	for i := 0; i < total+currentCount; i++ {
-		if time.Since(now) > 13*time.Second {
-			now = time.Now()
-			if _, err := cl.Beat(); err != nil {
-				fmt.Printf("error beat: %v\n", err)
-			}
-		}
 		if err := processJobForBatch(cl, "batch_load", nil); err != nil {
 			fmt.Println(err)
 			return
