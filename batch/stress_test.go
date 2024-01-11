@@ -4,92 +4,55 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
-	"os/signal"
-	"runtime"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
-	"github.com/contribsys/faktory/cli"
 	"github.com/contribsys/faktory/client"
+	"github.com/contribsys/faktory/server"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestBatchStress(t *testing.T) {
 	batchSystem := new(BatchSubsystem)
 	ctx := context.Background()
-	dir := "/tmp/batching_stress_test.db"
-	defer os.RemoveAll(dir)
-	opts := &cli.CliOptions{
-		CmdBinding:       "localhost:7416",
-		WebBinding:       "localhost:7420",
-		Environment:      "development",
-		ConfigDirectory:  ".",
-		LogLevel:         "debug",
-		StorageDirectory: dir,
-	}
-	s, stopper, err := cli.BuildServer(opts)
-	if stopper != nil {
-		defer stopper()
-	}
-	if err != nil {
-		panic(err)
-	}
 
-	go stacks()
-	go cli.HandleSignals(s)
+	withServer([]server.Subsystem{batchSystem}, enableBatching, func(s *server.Server, cl *client.Client) {
+		start := time.Now()
 
-	err = s.Boot()
-	if err != nil {
-		panic(err)
-	}
+		batches := 5
+		depth := 12
+		jobsPerBatch := 10
+		waitGroups := 3
+		total := (batches * depth * jobsPerBatch * jobsPerBatch) + batches
+		var wg sync.WaitGroup
+		for i := 0; i < waitGroups; i++ {
+			wg.Add(1)
+			go func(queue string) {
+				cl, hb, err := getClient(s.Options.Binding)
+				assert.Nil(t, err)
+				defer cl.Close()
+				defer hb()
 
-	s.Options.GlobalConfig["batch"] = map[string]interface{}{
-		"enabled": true,
-	}
+				createAndProcessBatches(cl, batches, depth, jobsPerBatch, queue)
+				log.Printf("Processed %d total jobs and batches (count=%d, children=%d, depth=%d) in %v\n", total, batches, jobsPerBatch, depth, time.Since(start))
+				wg.Done()
+			}(fmt.Sprintf("default-%d", i))
+		}
+		wg.Wait()
+		currentCount := 0
+		assert.EqualValues(t, 2*total*waitGroups, int(s.Store().TotalProcessed(ctx)))
+		for i := 0; i < waitGroups; i++ {
+			q, err := s.Store().GetQueue(ctx, fmt.Sprintf("default-%d", i))
+			assert.Nil(t, err)
+			currentCount += int(q.Size(ctx))
+		}
 
-	s.Register(batchSystem)
-
-	go func() {
-		_ = s.Run()
-	}()
-
-	start := time.Now()
-
-	batches := 5
-	depth := 12
-	jobsPerBatch := 10
-	waitGroups := 3
-	total := (batches * depth * jobsPerBatch * jobsPerBatch) + batches
-	var wg sync.WaitGroup
-	for i := 0; i < waitGroups; i++ {
-		wg.Add(1)
-		cl, err := getClient()
+		assert.EqualValues(t, 0, currentCount)
+		batchQueue, err := s.Store().GetQueue(ctx, "batch_load_complete")
 		assert.Nil(t, err)
-		go func(queue string, cl *client.Client) {
-			createAndProcessBatches(cl, batches, depth, jobsPerBatch, queue)
-			log.Printf("Processed %d total jobs and batches (count=%d, children=%d, depth=%d) in %v\n", total, batches, jobsPerBatch, depth, time.Since(start))
-			cl.Close()
-			wg.Done()
-		}(fmt.Sprintf("default-%d", i), cl)
-	}
-	wg.Wait()
-	currentCount := 0
-	assert.EqualValues(t, 2*total*waitGroups, int(s.Store().TotalProcessed(ctx)))
-	for i := 0; i < waitGroups; i++ {
-		q, err := s.Store().GetQueue(ctx, fmt.Sprintf("default-%d", i))
-		assert.Nil(t, err)
-		currentCount += int(q.Size(ctx))
-	}
-
-	assert.EqualValues(t, 0, currentCount)
-	batchQueue, err := s.Store().GetQueue(ctx, "batch_load_complete")
-	assert.Nil(t, err)
-	assert.EqualValues(t, waitGroups*total, int(batchQueue.Size(ctx)))
-	close(s.Stopper())
-	s.Stop(nil)
+		assert.EqualValues(t, waitGroups*total, int(batchQueue.Size(ctx)))
+	})
 }
 
 func runJob(cl *client.Client, jobsPerBatch int, depth int, currentDepth int, queue string) func(*client.Job) {
@@ -198,17 +161,6 @@ func pushJob(b *client.Batch, queue string) error {
 	job := client.NewJob("SomeJob", 1)
 	job.Queue = queue
 	return b.Push(job)
-}
-
-func stacks() {
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGQUIT)
-	buf := make([]byte, 1<<20)
-	for {
-		<-sigs
-		stacklen := runtime.Stack(buf, true)
-		log.Printf("=== received SIGQUIT ===\n*** goroutine dump...\n%s\n*** end\n", buf[:stacklen])
-	}
 }
 
 func processJobForBatch(cl *client.Client, queue string, runner func(job *client.Job)) error {

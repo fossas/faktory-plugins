@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/contribsys/faktory/client"
+	"github.com/contribsys/faktory/server"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -15,7 +16,7 @@ func TestChildBatch(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("Nested children", func(t *testing.T) {
-		withServer(batchSystem, true, func(cl *client.Client) {
+		withServer([]server.Subsystem{batchSystem}, enableBatching, func(_ *server.Server, cl *client.Client) {
 			var batchA *client.Batch
 			var batchB *client.Batch
 			var batchA1 *client.Batch
@@ -280,7 +281,7 @@ func TestChildBatch(t *testing.T) {
 	t.Run("Set child depth", func(t *testing.T) {
 		ctx := context.Background()
 
-		withServer(batchSystem, true, func(cl *client.Client) {
+		withServer([]server.Subsystem{batchSystem}, enableBatching, func(_ *server.Server, cl *client.Client) {
 			var batchA *client.Batch
 			var batchB *client.Batch
 			var batchA1 *client.Batch
@@ -407,7 +408,7 @@ func TestChildBatch(t *testing.T) {
 	})
 
 	t.Run("Batch multiple parents", func(t *testing.T) {
-		withServer(batchSystem, true, func(cl *client.Client) {
+		withServer([]server.Subsystem{batchSystem}, enableBatching, func(s *server.Server, cl *client.Client) {
 			var batchA *client.Batch
 			b := client.NewBatch(cl)
 			b.Description = "top build"
@@ -461,10 +462,10 @@ func TestChildBatch(t *testing.T) {
 			assert.Nil(t, err)
 			assert.Len(t, topBatch2.Children, 2)
 			// build A
-			cl2, err := getClient()
+			cl2, hb, err := getClient(s.Options.Binding)
 			assert.Nil(t, err)
 			defer cl2.Close()
-			assert.Nil(t, err)
+			defer hb()
 
 			var wg sync.WaitGroup
 			wg.Add(2)
