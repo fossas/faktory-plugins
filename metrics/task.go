@@ -30,9 +30,15 @@ func (m *metricsTask) Execute(ctx context.Context) error {
 		if err := m.Subsystem.StatsDClient().Gauge(m.Subsystem.PrefixMetricName("connections.count"), float64(connectionCount), m.Subsystem.Options.Tags, 1); err != nil {
 			util.Warnf("unable to submit metric: %v", err)
 		}
+		if err := m.Subsystem.StatsDClient().Gauge("faktory.ops.connections", float64(connectionCount), m.Subsystem.Options.Tags, 1); err != nil {
+			util.Warnf("unable to submit metric: %v", err)
+		}
 
 		workingCount := m.Subsystem.Server.Store().Working().Size(ctx)
 		if err := m.Subsystem.StatsDClient().Gauge(m.Subsystem.PrefixMetricName("working.count"), float64(workingCount), m.Subsystem.Options.Tags, 1); err != nil {
+			util.Warnf("unable to submit metric: %v", err)
+		}
+		if err := m.Subsystem.StatsDClient().Gauge("faktory.jobs.working", float64(workingCount), m.Subsystem.Options.Tags, 1); err != nil {
 			util.Warnf("unable to submit metric: %v", err)
 		}
 
@@ -40,9 +46,15 @@ func (m *metricsTask) Execute(ctx context.Context) error {
 		if err := m.Subsystem.StatsDClient().Gauge(m.Subsystem.PrefixMetricName("scheduled.count"), float64(scheduledCount), m.Subsystem.Options.Tags, 1); err != nil {
 			util.Warnf("unable to submit metric: %v", err)
 		}
+		if err := m.Subsystem.StatsDClient().Gauge("faktory.jobs.scheduled", float64(scheduledCount), m.Subsystem.Options.Tags, 1); err != nil {
+			util.Warnf("unable to submit metric: %v", err)
+		}
 
 		retriesCount := m.Subsystem.Server.Store().Retries().Size(ctx)
 		if err := m.Subsystem.StatsDClient().Gauge(m.Subsystem.PrefixMetricName("retries.count"), float64(retriesCount), m.Subsystem.Options.Tags, 1); err != nil {
+			util.Warnf("unable to submit metric: %v", err)
+		}
+		if err := m.Subsystem.StatsDClient().Gauge("faktory.jobs.retries", float64(retriesCount), m.Subsystem.Options.Tags, 1); err != nil {
 			util.Warnf("unable to submit metric: %v", err)
 		}
 
@@ -50,14 +62,22 @@ func (m *metricsTask) Execute(ctx context.Context) error {
 		if err := m.Subsystem.StatsDClient().Gauge(m.Subsystem.PrefixMetricName("dead.count"), float64(deadCount), m.Subsystem.Options.Tags, 1); err != nil {
 			util.Warnf("unable to submit metric: %v", err)
 		}
+		if err := m.Subsystem.StatsDClient().Gauge("faktory.jobs.dead", float64(deadCount), m.Subsystem.Options.Tags, 1); err != nil {
+			util.Warnf("unable to submit metric: %v", err)
+		}
 
 		var totalEnqueued uint64 = 0
 
 		m.Subsystem.Server.Store().EachQueue(ctx, func(queue storage.Queue) {
+			tags := append(m.Subsystem.Options.Tags, fmt.Sprintf("queue:%s", queue.Name()))
+
 			count := queue.Size(ctx)
 			totalEnqueued += count
 			queueCountMetricName := m.Subsystem.PrefixMetricName(fmt.Sprintf("enqueued.%s.count", queue.Name()))
 			if err := m.Subsystem.StatsDClient().Gauge(queueCountMetricName, float64(count), m.Subsystem.Options.Tags, 1); err != nil {
+				util.Warnf("unable to submit metric: %v", err)
+			}
+			if err := m.Subsystem.StatsDClient().Gauge("faktory.jobs.enqueued", float64(count), tags, 1); err != nil {
 				util.Warnf("unable to submit metric: %v", err)
 			}
 
@@ -67,7 +87,7 @@ func (m *metricsTask) Execute(ctx context.Context) error {
 			// This does an LRANGE on the queue
 			// start is the offset from the left of the queue
 			// count is not the number of items to fetch, but rather the offset to the last item to return
-			// Jobs are LPUSH'd into the queue and RPOP'd out, so to get the last job we want -1, -1
+			// Jobs are LPUSH'd into the queue and RPOP'd out, so to get the last job we want -1, 0
 			queue.Page(ctx, -1, 0, func(_ int, data []byte) error {
 				var job client.Job
 				if err := json.Unmarshal(data, &job); err != nil {
@@ -88,6 +108,9 @@ func (m *metricsTask) Execute(ctx context.Context) error {
 				util.Warnf("unable to submit metric: %v", err)
 			}
 			if err := m.Subsystem.StatsDClient().Timing(queueLatencyMetricNameHist, timeElapsed, m.Subsystem.Options.Tags, 1); err != nil {
+				util.Warnf("unable to submit metric: %v", err)
+			}
+			if err := m.Subsystem.StatsDClient().Gauge("faktory.jobs.latency", float64(timeElapsed.Milliseconds()), tags, 1); err != nil {
 				util.Warnf("unable to submit metric: %v", err)
 			}
 
