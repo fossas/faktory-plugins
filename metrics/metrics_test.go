@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"math/rand"
@@ -94,6 +95,7 @@ func TestMetrics(t *testing.T) {
 	mockDoer := mocks.NewMockClientInterface(mockCtrl)
 	t.Run("Metrics are collected in the middleware", func(t *testing.T) {
 		system := new(MetricsSubsystem)
+		ctx := context.Background()
 		configDir := createConfigDir(t)
 		confgFile := fmt.Sprintf("%s/conf.d/statsd.toml", configDir)
 		if err := ioutil.WriteFile(confgFile, []byte(statsdConfig), os.FileMode(0444)); err != nil {
@@ -192,12 +194,12 @@ func TestMetrics(t *testing.T) {
 
 			// fail 3 jobs
 			processJob("default", cl, false, nil)
-			server.Manager().RetryJobs(time.Now().Add(-60 * time.Second))
+			server.Manager().RetryJobs(ctx, time.Now().Add(-60*time.Second))
 			processJob("builds", cl, false, nil)
 			processJob("tests", cl, false, nil)
 
 			m := &metricsTask{system}
-			m.Execute()
+			m.Execute(ctx)
 		})
 	})
 }

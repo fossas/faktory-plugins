@@ -1,6 +1,7 @@
 package uniq
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"math/rand"
@@ -60,6 +61,8 @@ func TestUniq(t *testing.T) {
 	}()
 
 	t.Run("jobs are uniq", func(t *testing.T) {
+		ctx := context.Background()
+
 		// this is a worker process so we need to set the global WID before connecting
 		client.RandomProcessWid = strconv.FormatInt(rand.Int63(), 32)
 
@@ -97,11 +100,11 @@ func TestUniq(t *testing.T) {
 		err = cl.Push(job2)
 		assert.EqualError(t, err, "NOTUNIQUE Job has already been queued.")
 
-		queue, err := s.Store().GetQueue("default")
+		queue, err := s.Store().GetQueue(ctx, "default")
 		if err != nil {
 			panic(err)
 		}
-		assert.Equal(t, queue.Size(), uint64(1))
+		assert.Equal(t, queue.Size(ctx), uint64(1))
 
 		// job1 processing
 		processJob(cl, func() {
@@ -130,7 +133,7 @@ func TestUniq(t *testing.T) {
 		assert.Nil(t, err)
 
 		// job3, job4, otherUniqJob
-		assert.Equal(t, queue.Size(), uint64(3))
+		assert.Equal(t, queue.Size(ctx), uint64(3))
 
 		invalidJob := client.NewJob("UniqJobTwo", 3, "string", 3)
 		invalidJob.SetCustom("unique_until", "other")

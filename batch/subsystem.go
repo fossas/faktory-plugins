@@ -1,10 +1,12 @@
 package batch
 
 import (
+	"context"
+	"sync"
+
 	"github.com/contribsys/faktory/manager"
 	"github.com/contribsys/faktory/server"
 	"github.com/contribsys/faktory/util"
-	"sync"
 )
 
 // BatchSubsystem enables jobs to be grouped into a batch
@@ -30,6 +32,8 @@ type Options struct {
 
 // Start - configures the batch subsystem
 func (b *BatchSubsystem) Start(s *server.Server) error {
+	ctx := context.Background()
+
 	b.Options = b.getOptions(s)
 	if !b.Options.Enabled {
 		return nil
@@ -42,7 +46,7 @@ func (b *BatchSubsystem) Start(s *server.Server) error {
 		Subsystem: b,
 	}
 	b.Fetcher = manager.BasicFetcher(s.Manager().Redis())
-	if err := b.batchManager.loadExistingBatches(); err != nil {
+	if err := b.batchManager.loadExistingBatches(ctx); err != nil {
 		util.Warnf("loading existing batches: %v", err)
 	}
 	server.CommandSet["BATCH"] = b.batchCommand

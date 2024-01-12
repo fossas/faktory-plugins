@@ -1,6 +1,8 @@
 package batch
 
 import (
+	"context"
+
 	"github.com/contribsys/faktory/server"
 )
 
@@ -16,14 +18,14 @@ func (t *removeStaleBatches) Name() string {
 }
 
 // Execute - runs the task to collect metrics
-func (t *removeStaleBatches) Execute() error {
-	go t.Subsystem.batchManager.removeStaleBatches()
+func (t *removeStaleBatches) Execute(ctx context.Context) error {
+	go t.Subsystem.batchManager.removeStaleBatches(ctx)
 	return nil
 }
 
 // Stats - this is required but there are no useful stats to record for batches
 // so return an empty map
-func (t *removeStaleBatches) Stats() map[string]interface{} {
+func (t *removeStaleBatches) Stats(ctx context.Context) map[string]interface{} {
 	// no stats
 	return map[string]interface{}{}
 }

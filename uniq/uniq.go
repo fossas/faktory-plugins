@@ -1,6 +1,7 @@
 package uniq
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -71,9 +72,11 @@ func (u *UniqSubsystem) addMiddleware() {
 	u.Server.Manager().AddMiddleware("ack", u.releaseLockMiddleware(string(client.UntilSuccess)))
 }
 
-func (u *UniqSubsystem) lockMiddleware(next func() error, ctx manager.Context) error {
+func (u *UniqSubsystem) lockMiddleware(ctx context.Context, next func() error) error {
+	mh := ctx.Value(manager.MiddlewareHelperKey).(manager.Ctx)
+
 	var uniqueFor float64
-	uniqueForValue, ok := ctx.Job().GetCustom("unique_for")
+	uniqueForValue, ok := mh.Job().GetCustom("unique_for")
 	if !ok {
 		return next()
 	}
@@ -85,26 +88,26 @@ func (u *UniqSubsystem) lockMiddleware(next func() error, ctx manager.Context) e
 		return manager.Halt("ERR", "unique_for must be greater than or equal to 1.")
 	}
 
-	uniqueUntilValue, ok := ctx.Job().GetCustom("unique_until")
+	uniqueUntilValue, ok := mh.Job().GetCustom("unique_until")
 	if ok {
 		uniqueUntil, ok := uniqueUntilValue.(string)
 		if !ok || (uniqueUntil != string(client.UntilStart) && uniqueUntil != string(client.UntilSuccess)) {
 			return manager.Halt("ERR", "invalid value for unique_until.")
 		}
 	} else {
-		ctx.Job().SetUniqueness(client.UntilSuccess)
+		mh.Job().SetUniqueness(client.UntilSuccess)
 	}
 
-	key, err := u.generateKey(ctx.Job())
+	key, err := u.generateKey(mh.Job())
 	if err != nil {
 		return fmt.Errorf("generate key: %v", err)
 	}
 
 	lockTime := time.Duration(uniqueFor) * time.Second
-	if ctx.Job().At != "" {
-		t, err := util.ParseTime(ctx.Job().At)
+	if mh.Job().At != "" {
+		t, err := util.ParseTime(mh.Job().At)
 		if err != nil {
-			return fmt.Errorf("Invalid timestamp for 'at': '%s'", ctx.Job().At)
+			return fmt.Errorf("invalid timestamp for 'at': '%s'", mh.Job().At)
 		}
 		if t.After(time.Now()) {
 			addedTime := time.Duration(time.Until(t))
@@ -112,9 +115,9 @@ func (u *UniqSubsystem) lockMiddleware(next func() error, ctx manager.Context) e
 		}
 
 	}
-	status, err := u.Server.Manager().Redis().SetNX(key, ctx.Job().Jid, lockTime).Result()
+	status, err := u.Server.Manager().Redis().SetNX(ctx, key, mh.Job().Jid, lockTime).Result()
 	if err != nil {
-		return fmt.Errorf("Redis unable to set key: %w", err)
+		return fmt.Errorf("redis unable to set key: %w", err)
 	}
 	if !status {
 		return manager.Halt("NOTUNIQUE", "Job has already been queued.")
@@ -124,19 +127,21 @@ func (u *UniqSubsystem) lockMiddleware(next func() error, ctx manager.Context) e
 	return next()
 }
 
-func (u *UniqSubsystem) releaseLockMiddleware(releaseAt string) func(next func() error, ctx manager.Context) error {
-	return func(next func() error, ctx manager.Context) error {
-		if _, ok := ctx.Job().GetCustom("unique_for"); !ok {
+func (u *UniqSubsystem) releaseLockMiddleware(releaseAt string) func(context.Context, func() error) error {
+	return func(ctx context.Context, next func() error) error {
+		mh := ctx.Value(manager.MiddlewareHelperKey).(manager.Ctx)
+
+		if _, ok := mh.Job().GetCustom("unique_for"); !ok {
 			return next()
 		}
 
-		uniqueUntilValue, ok := ctx.Job().GetCustom("unique_until")
+		uniqueUntilValue, ok := mh.Job().GetCustom("unique_until")
 
 		if !ok {
 			return next()
 		}
 
-		key, err := u.generateKey(ctx.Job())
+		key, err := u.generateKey(mh.Job())
 
 		if err != nil {
 			return fmt.Errorf("generate key: %v", err)
@@ -151,7 +156,7 @@ func (u *UniqSubsystem) releaseLockMiddleware(releaseAt string) func(next func()
 		}
 
 		if uniqueUntil == releaseAt {
-			released, err := u.Server.Manager().Redis().Unlink(key).Result()
+			released, err := u.Server.Manager().Redis().Unlink(ctx, key).Result()
 			// we can ignore the error since all unique keys have an expiration
 			// the worst case is we are unable to queue up another job with the same parameters
 			if err != nil {

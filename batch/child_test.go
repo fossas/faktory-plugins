@@ -1,17 +1,22 @@
 package batch
 
 import (
+	"context"
 	"fmt"
-	"github.com/contribsys/faktory/client"
-	"github.com/stretchr/testify/assert"
 	"sync"
 	"testing"
+
+	"github.com/contribsys/faktory/client"
+	"github.com/contribsys/faktory/server"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestChildBatch(t *testing.T) {
 	batchSystem := new(BatchSubsystem)
+	ctx := context.Background()
+
 	t.Run("Nested children", func(t *testing.T) {
-		withServer(batchSystem, true, func(cl *client.Client) {
+		withServer([]server.Subsystem{batchSystem}, enableBatching, func(_ *server.Server, cl *client.Client) {
 			var batchA *client.Batch
 			var batchB *client.Batch
 			var batchA1 *client.Batch
@@ -32,6 +37,7 @@ func TestChildBatch(t *testing.T) {
 				batchA.Complete = client.NewJob("A.batchDone", 1, "string", 3)
 				batchA.Success = client.NewJob("A.batchSuccess", 2, "string", 4)
 				_, err = cl.BatchNew(batchA)
+				assert.Nil(t, err)
 				val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", b.Bid, batchA.Bid))
 				assert.Nil(t, err)
 				assert.Equal(t, val, "OK")
@@ -51,7 +57,7 @@ func TestChildBatch(t *testing.T) {
 				return nil
 			})
 			assert.Nil(t, err)
-			batchData, err := batchSystem.batchManager.getBatch(b.Bid)
+			batchData, err := batchSystem.batchManager.getBatch(ctx, b.Bid)
 			assert.Nil(t, err)
 			assert.Len(t, batchData.Children, 2)
 
@@ -68,6 +74,7 @@ func TestChildBatch(t *testing.T) {
 					batchA1.Complete = client.NewJob("A.1.batchDone", 1, "string", 3)
 					batchA1.Success = client.NewJob("A.1.batchSuccess", 2, "string", 4)
 					_, err = cl.BatchNew(batchA1)
+					assert.Nil(t, err)
 					val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", batch.Bid, batchA1.Bid))
 					assert.Nil(t, err)
 					assert.Equal(t, val, "OK")
@@ -79,6 +86,7 @@ func TestChildBatch(t *testing.T) {
 				})
 				assert.Nil(t, err)
 			})
+			assert.Nil(t, err)
 
 			// job B depth 1
 			err = processJob(cl, true, func(job *client.Job) {
@@ -93,6 +101,7 @@ func TestChildBatch(t *testing.T) {
 					batchB1.Complete = client.NewJob("B.1.batchDone", 1, "string", 3)
 					batchB1.Success = client.NewJob("B.1.batchSuccess", 2, "string", 4)
 					_, err = cl.BatchNew(batchB1)
+					assert.Nil(t, err)
 					val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", batch.Bid, batchB1.Bid))
 					assert.Nil(t, err)
 					assert.Equal(t, val, "OK")
@@ -101,6 +110,7 @@ func TestChildBatch(t *testing.T) {
 				})
 				assert.Nil(t, err)
 			})
+			assert.Nil(t, err)
 
 			// job A.1 depth 2
 			err = processJob(cl, true, func(job *client.Job) {
@@ -115,6 +125,7 @@ func TestChildBatch(t *testing.T) {
 					batchC1.Complete = client.NewJob("C.1.batchDone", 1, "string", 3)
 					batchC1.Success = client.NewJob("C.1.batchSuccess", 2, "string", 4)
 					_, err = cl.BatchNew(batchC1)
+					assert.Nil(t, err)
 					val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", batch.Bid, batchC1.Bid))
 					assert.Nil(t, err)
 					assert.Equal(t, val, "OK")
@@ -123,6 +134,7 @@ func TestChildBatch(t *testing.T) {
 				})
 				assert.Nil(t, err)
 			})
+			assert.Nil(t, err)
 
 			// job B.1 depth 2
 			err = processJob(cl, true, func(job *client.Job) {
@@ -137,6 +149,7 @@ func TestChildBatch(t *testing.T) {
 					batchD1.Complete = client.NewJob("D.1.batchDone", 1, "string", 3)
 					batchD1.Success = client.NewJob("D.1.batchSuccess", 2, "string", 4)
 					_, err = cl.BatchNew(batchD1)
+					assert.Nil(t, err)
 					val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", batch.Bid, batchD1.Bid))
 					assert.Nil(t, err)
 					assert.Equal(t, val, "OK")
@@ -145,6 +158,7 @@ func TestChildBatch(t *testing.T) {
 				})
 				assert.Nil(t, err)
 			})
+			assert.Nil(t, err)
 
 			// job C.1 depth 3 relies on D
 			err = processJob(cl, true, func(job *client.Job) {
@@ -157,6 +171,7 @@ func TestChildBatch(t *testing.T) {
 				err = batch.Commit()
 				assert.Nil(t, err)
 			})
+			assert.Nil(t, err)
 
 			// job D.1 depth 3 from B.1 / depth 4 from C.1
 			err = processJob(cl, true, func(job *client.Job) {
@@ -170,6 +185,7 @@ func TestChildBatch(t *testing.T) {
 				err = batch.Commit()
 				assert.Nil(t, err)
 			})
+			assert.Nil(t, err)
 
 			assert.Nil(t, err)
 			assert.Equal(t, 2, batchData.Meta.Succeeded)
@@ -256,14 +272,16 @@ func TestChildBatch(t *testing.T) {
 			assert.Nil(t, err)
 
 			// batch A1 and B1 have not been committed as this point
-			assert.Equal(t, uint64(0), batchSystem.Server.Store().Scheduled().Size())
-			def, _ := batchSystem.Server.Store().GetQueue("default")
-			assert.Equal(t, uint64(0), def.Size())
+			assert.Equal(t, uint64(0), batchSystem.Server.Store().Scheduled().Size(ctx))
+			def, _ := batchSystem.Server.Store().GetQueue(ctx, "default")
+			assert.Equal(t, uint64(0), def.Size(ctx))
 		})
 	})
 
 	t.Run("Set child depth", func(t *testing.T) {
-		withServer(batchSystem, true, func(cl *client.Client) {
+		ctx := context.Background()
+
+		withServer([]server.Subsystem{batchSystem}, enableBatching, func(_ *server.Server, cl *client.Client) {
 			var batchA *client.Batch
 			var batchB *client.Batch
 			var batchA1 *client.Batch
@@ -281,6 +299,7 @@ func TestChildBatch(t *testing.T) {
 				batchA.Complete = client.NewJob("A.batchDone", 1, "string", 3)
 				batchA.Success = client.NewJob("A.batchSuccess", 2, "string", 4)
 				_, err = cl.BatchNew(batchA)
+				assert.Nil(t, err)
 				val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", b.Bid, batchA.Bid))
 				assert.Nil(t, err)
 				assert.Equal(t, val, "OK")
@@ -300,7 +319,7 @@ func TestChildBatch(t *testing.T) {
 				return nil
 			})
 			assert.Nil(t, err)
-			batchData, err := batchSystem.batchManager.getBatch(b.Bid)
+			batchData, err := batchSystem.batchManager.getBatch(ctx, b.Bid)
 			assert.Nil(t, err)
 			assert.Len(t, batchData.Children, 2)
 			depth := 1
@@ -319,6 +338,7 @@ func TestChildBatch(t *testing.T) {
 					batchA1.Complete = client.NewJob("A.1.batchDone", 1, "string", 3)
 					batchA1.Success = client.NewJob("A.1.batchSuccess", 2, "string", 4)
 					_, err = cl.BatchNew(batchA1)
+					assert.Nil(t, err)
 					val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", batch.Bid, batchA1.Bid))
 					assert.Nil(t, err)
 					assert.Equal(t, val, "OK")
@@ -327,6 +347,7 @@ func TestChildBatch(t *testing.T) {
 				})
 				assert.Nil(t, err)
 			})
+			assert.Nil(t, err)
 
 			// job B depth 1
 			err = processJob(cl, true, func(job *client.Job) {
@@ -380,14 +401,14 @@ func TestChildBatch(t *testing.T) {
 				assert.Equal(t, "batchSuccess", job.Type)
 			})
 			assert.Nil(t, err)
-			assert.Equal(t, uint64(0), batchSystem.Server.Store().Scheduled().Size())
-			def, _ := batchSystem.Server.Store().GetQueue("default")
-			assert.Equal(t, uint64(0), def.Size())
+			assert.Equal(t, uint64(0), batchSystem.Server.Store().Scheduled().Size(ctx))
+			def, _ := batchSystem.Server.Store().GetQueue(ctx, "default")
+			assert.Equal(t, uint64(0), def.Size(ctx))
 		})
 	})
 
 	t.Run("Batch multiple parents", func(t *testing.T) {
-		withServer(batchSystem, true, func(cl *client.Client) {
+		withServer([]server.Subsystem{batchSystem}, enableBatching, func(s *server.Server, cl *client.Client) {
 			var batchA *client.Batch
 			b := client.NewBatch(cl)
 			b.Description = "top build"
@@ -400,6 +421,7 @@ func TestChildBatch(t *testing.T) {
 				batchA.Complete = client.NewJob("batchDone", 1, "string", 3)
 				batchA.Success = client.NewJob("batchSuccess", 2, "string", 4)
 				_, err = cl.BatchNew(batchA)
+				assert.Nil(t, err)
 				val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", b.Bid, batchA.Bid))
 				assert.Nil(t, err)
 				assert.Equal(t, val, "OK")
@@ -415,7 +437,8 @@ func TestChildBatch(t *testing.T) {
 
 			err = b2.Jobs(func() error {
 				val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", b2.Bid, batchA.Bid))
-
+				assert.Nil(t, err)
+				assert.Equal(t, val, "OK")
 				err = b2.Push(client.NewJob("B", 2))
 				assert.Nil(t, err)
 				batchB := client.NewBatch(cl)
@@ -431,17 +454,18 @@ func TestChildBatch(t *testing.T) {
 				return nil
 			})
 			assert.Nil(t, err)
-			topBatch, err := batchSystem.batchManager.getBatch(b.Bid)
+			topBatch, err := batchSystem.batchManager.getBatch(ctx, b.Bid)
 			assert.Nil(t, err)
 			assert.Len(t, topBatch.Children, 1)
 
-			topBatch2, err := batchSystem.batchManager.getBatch(b2.Bid)
+			topBatch2, err := batchSystem.batchManager.getBatch(ctx, b2.Bid)
 			assert.Nil(t, err)
 			assert.Len(t, topBatch2.Children, 2)
 			// build A
-			cl2, err := getClient()
-			defer cl2.Close()
+			cl2, hb, err := getClient(s.Options.Binding)
 			assert.Nil(t, err)
+			defer cl2.Close()
+			defer hb()
 
 			var wg sync.WaitGroup
 			wg.Add(2)

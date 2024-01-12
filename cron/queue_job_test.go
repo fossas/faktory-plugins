@@ -14,6 +14,8 @@ import (
 func TestQueueJob(t *testing.T) {
 	t.Run("faktory jobs are queued", func(t *testing.T) {
 		system := new(CronSubsystem)
+		ctx := context.Background()
+
 		configDir := createConfigDir(t)
 		confgFile := fmt.Sprintf("%s/conf.d/cron.toml", configDir)
 		if err := ioutil.WriteFile(confgFile, []byte(enabledConfig), os.FileMode(0444)); err != nil {
@@ -30,9 +32,9 @@ func TestQueueJob(t *testing.T) {
 				job:       &cronJob,
 			}
 			queueJob.Run()
-			queue, err := s.Store().GetQueue("test")
+			queue, err := s.Store().GetQueue(ctx, "test")
 			assert.Nil(t, err)
-			assert.Equal(t, uint64(1), queue.Size())
+			assert.Equal(t, uint64(1), queue.Size(ctx))
 
 			ctx := context.Background()
 			job, err := s.Manager().Fetch(ctx, "", "test")

@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/contribsys/faktory/client"
 	"strings"
+
+	"github.com/contribsys/faktory/client"
 
 	"github.com/contribsys/faktory/server"
 	"github.com/contribsys/faktory/util"
@@ -65,7 +66,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		}
 
 		meta := b.batchManager.newBatchMeta(batchRequest.Description, success, complete, batchRequest.ChildSearchDepth)
-		batch, err := b.batchManager.newBatch(batchId, meta)
+		batch, err := b.batchManager.newBatch(c.Context, batchId, meta)
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("unable to create batch: %v", err))
 			return
@@ -78,7 +79,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 
 		b.batchManager.lockBatchIfExists(batchId)
 		defer b.batchManager.unlockBatchIfExists(batchId)
-		batch, err := b.batchManager.getBatch(batchId)
+		batch, err := b.batchManager.getBatch(c.Context, batchId)
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot get batch: %v", err))
 			return
@@ -90,7 +91,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		}
 
 		if batch.Meta.Committed {
-			if err := b.batchManager.open(batch); err != nil {
+			if err := b.batchManager.open(c.Context, batch); err != nil {
 				_ = c.Error(cmd, fmt.Errorf("cannot open batch: %v", err))
 				return
 			}
@@ -106,13 +107,13 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		}
 		b.batchManager.lockBatchIfExists(batchId)
 		defer b.batchManager.unlockBatchIfExists(batchId)
-		batch, err := b.batchManager.getBatch(batchId)
+		batch, err := b.batchManager.getBatch(c.Context, batchId)
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot get batch: %v", err))
 			return
 		}
 
-		if err := b.batchManager.commit(batch); err != nil {
+		if err := b.batchManager.commit(c.Context, batch); err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot commit batch: %v", err))
 			return
 		}
@@ -133,7 +134,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		}
 		b.batchManager.lockBatchIfExists(batchId)
 		defer b.batchManager.unlockBatchIfExists(batchId)
-		batch, err := b.batchManager.getBatch(batchId)
+		batch, err := b.batchManager.getBatch(c.Context, batchId)
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot get batch: %v", err))
 			return
@@ -141,7 +142,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		opened := false
 		if batch.Meta.Committed {
 			// open will check if the batch has already finished
-			if err := b.batchManager.open(batch); err != nil {
+			if err := b.batchManager.open(c.Context, batch); err != nil {
 				_ = c.Error(cmd, errors.New("cannot open committed batch"))
 				return
 			}
@@ -149,13 +150,13 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		}
 
 		b.batchManager.lockBatchIfExists(childBatchId)
-		childBatch, err := b.batchManager.getBatch(childBatchId)
+		childBatch, err := b.batchManager.getBatch(c.Context, childBatchId)
 		// ok is used so the batch can be closed
 		ok := true
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot get child batch: %v", err))
 			ok = false
-		} else if err := b.batchManager.addChild(batch, childBatch); err != nil {
+		} else if err := b.batchManager.addChild(c.Context, batch, childBatch); err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot add child (%s) to batch (%s): %v", childBatchId, batchId, err))
 			ok = false
 		}
@@ -163,7 +164,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		b.batchManager.unlockBatchIfExists(childBatchId)
 		// ensure batch is committed if it was opened
 		if opened {
-			if err := b.batchManager.commit(batch); err != nil {
+			if err := b.batchManager.commit(c.Context, batch); err != nil {
 				_ = c.Error(cmd, errors.New("cannot commit batch"))
 				return
 			}
@@ -176,7 +177,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 		batchId := parts[1]
 		b.batchManager.lockBatchIfExists(batchId)
 		defer b.batchManager.unlockBatchIfExists(batchId)
-		batch, err := b.batchManager.getBatch(batchId)
+		batch, err := b.batchManager.getBatch(c.Context, batchId)
 		if err != nil {
 			_ = c.Error(cmd, fmt.Errorf("cannot find batch: %v", err))
 			return
