@@ -110,7 +110,10 @@ func (m *metricsTask) Execute(ctx context.Context) error {
 			if err := m.Subsystem.StatsDClient().Timing(queueLatencyMetricNameHist, timeElapsed, m.Subsystem.Options.Tags, 1); err != nil {
 				util.Warnf("unable to submit metric: %v", err)
 			}
-			if err := m.Subsystem.StatsDClient().Gauge("faktory.jobs.latency", float64(timeElapsed.Milliseconds()), tags, 1); err != nil {
+			if err := m.Subsystem.StatsDClient().Gauge("faktory.jobs.current_latency", float64(timeElapsed.Milliseconds()), tags, 1); err != nil {
+				util.Warnf("unable to submit metric: %v", err)
+			}
+			if err := m.Subsystem.StatsDClient().Timing("faktory.jobs.latency", timeElapsed, tags, 1); err != nil {
 				util.Warnf("unable to submit metric: %v", err)
 			}
 

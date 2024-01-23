@@ -27,7 +27,8 @@ enabled = true # enables this plugin
 | faktory.jobs.retries                                 | Gauge     | Current number of jobs to be retried                                                                                                 |
 | faktory.jobs.dead                                    | Gauge     | Current number of dead jobs                                                                                                          |
 | faktory.jobs.enqueued{queue}                         | Gauge     | Number of jobs in {queue}                                                                                                            |
-| faktory.jobs.latency{queue}                          | Gauge     | The time between now and when the oldest queued job was enqueued                                                                     |
+| faktory.jobs.current_latency{queue}                  | Gauge     | The time between now and when the oldest queued job was enqueued                                                                     |
+| faktory.jobs.latency{queue}                          | Histogram | Timing for how long the oldest job has waited in the queue                                                                           |
 | faktory.jobs.pushed{queue, jobtype}                  | Counter   | Total number of jobs pushed                                                                                                          |
 | faktory.jobs.fetched{queue, jobtype}                 | Counter   | Total number of jobs fetched                                                                                                         |
 | faktory.jobs.processed{queue, jobtype, status, dead} | Histogram | Timing for jobs that have been ACKed or FAILed. `status` is one of `success` or `fail`. `dead` is a boolean present for failed jobs. |
