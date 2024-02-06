@@ -73,7 +73,7 @@ func (u *UniqSubsystem) addMiddleware() {
 }
 
 func (u *UniqSubsystem) lockMiddleware(ctx context.Context, next func() error) error {
-	mh := ctx.Value(manager.MiddlewareHelperKey).(manager.Ctx)
+	mh := ctx.Value(manager.MiddlewareHelperKey).(manager.Context)
 
 	var uniqueFor float64
 	uniqueForValue, ok := mh.Job().GetCustom("unique_for")
@@ -129,7 +129,7 @@ func (u *UniqSubsystem) lockMiddleware(ctx context.Context, next func() error) e
 
 func (u *UniqSubsystem) releaseLockMiddleware(releaseAt string) func(context.Context, func() error) error {
 	return func(ctx context.Context, next func() error) error {
-		mh := ctx.Value(manager.MiddlewareHelperKey).(manager.Ctx)
+		mh := ctx.Value(manager.MiddlewareHelperKey).(manager.Context)
 
 		if _, ok := mh.Job().GetCustom("unique_for"); !ok {
 			return next()

@@ -9,7 +9,7 @@ import (
 )
 
 func (b *BatchSubsystem) pushMiddleware(ctx context.Context, next func() error) error {
-	mh := ctx.Value(manager.MiddlewareHelperKey).(manager.Ctx)
+	mh := ctx.Value(manager.MiddlewareHelperKey).(manager.Context)
 
 	if bid, ok := mh.Job().GetCustom("bid"); ok {
 		batchId, err := b.batchManager.getBatchIdFromInterface(bid)
@@ -33,7 +33,7 @@ func (b *BatchSubsystem) pushMiddleware(ctx context.Context, next func() error) 
 
 func (b *BatchSubsystem) handleJobFinished(success bool) func(ctx context.Context, next func() error) error {
 	return func(ctx context.Context, next func() error) error {
-		mh := ctx.Value(manager.MiddlewareHelperKey).(manager.Ctx)
+		mh := ctx.Value(manager.MiddlewareHelperKey).(manager.Context)
 
 		if success {
 			// check if this is a success / complete job from batch
