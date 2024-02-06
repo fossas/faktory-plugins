@@ -19,23 +19,19 @@ enabled = true # enables this plugin
 
 ### Dogstatsd Metrics
 
-Metrics are collected through a task and middleware.
-
-Metrics tracked through middleware are:
-`jobs.succeeded.time.count` - number of jobs successful
-`jobs.succeeded.time` - time to complete
-`jobs.failed.time.count` - number of jobs failed
-`jobs.failed.time` - time to complete
-
-Metrics tracked through a task (every 10 seconds) are:
-
-`jobs.enqueued.{queueName}.count` - number of jobs in a queue by name
-`jobs.enqueued.{queueName}.time` - current queue time for next job
-`jobs.working.count` - number of jobs currently running
-`jobs.scheduled.count` - number of jobs scheduled
-`jobs.retries.count` - number of jobs in retry state
-`jobs.dead.count` - number of dead jobs
-`jobs.enqueued.count` - total number of enqueued jobs
+| Name                                                 | Type      | Description                                                                                                                          |
+| ---------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| faktory.ops.connections                              | Gauge     | Faktory client network connections                                                                                                   |
+| faktory.jobs.working                                 | Gauge     | Current number of jobs being processed                                                                                               |
+| faktory.jobs.scheduled                               | Gauge     | Current number of scheduled jobs                                                                                                     |
+| faktory.jobs.retries                                 | Gauge     | Current number of jobs to be retried                                                                                                 |
+| faktory.jobs.dead                                    | Gauge     | Current number of dead jobs                                                                                                          |
+| faktory.jobs.enqueued{queue}                         | Gauge     | Number of jobs in {queue}                                                                                                            |
+| faktory.jobs.current_latency{queue}                  | Gauge     | The time between now and when the oldest queued job was enqueued                                                                     |
+| faktory.jobs.latency{queue}                          | Histogram | Timing for how long the oldest job has waited in the queue                                                                           |
+| faktory.jobs.pushed{queue, jobtype}                  | Counter   | Total number of jobs pushed                                                                                                          |
+| faktory.jobs.fetched{queue, jobtype}                 | Counter   | Total number of jobs fetched                                                                                                         |
+| faktory.jobs.processed{queue, jobtype, status, dead} | Histogram | Timing for jobs that have been ACKed or FAILed. `status` is one of `success` or `fail`. `dead` is a boolean present for failed jobs. |
 
 #### Configuration (required)
 
@@ -44,7 +40,6 @@ Any file ending in .toml will be read as a configuration file for faktory. Here'
 ```
 [metrics]
 enabled = true # enables this plugin
-namespace = "jobs" # changes the prefix for the metric from `jobs.` to the value specified
 tags = ["tag1:value1", "tag2:value2"] # tags passed to datadog on every metric
 ```
 

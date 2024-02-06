@@ -110,24 +110,42 @@ func TestMetrics(t *testing.T) {
 			// middleware jobs
 			tags := []string{"tag1:value1", "tag2:value2"}
 			mockDoer.EXPECT().Timing("jobs.succeeded.time", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(3)
+			mockDoer.EXPECT().Timing("faktory.jobs.processed", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(3)
 			mockDoer.EXPECT().Timing("jobs.failed.time", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(3)
+			mockDoer.EXPECT().Timing("faktory.jobs.processed", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(3)
+			mockDoer.EXPECT().Incr("faktory.jobs.pushed", gomock.Any(), float64(1)).Return(nil).Times(15)
+			mockDoer.EXPECT().Incr("faktory.jobs.fetched", gomock.Any(), float64(1)).Return(nil).Times(6)
 
 			// task calls
 			mockDoer.EXPECT().Gauge("jobs.connections.count", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("faktory.ops.connections", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.working.count", float64(0), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("faktory.jobs.working", float64(0), gomock.Any(), gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.scheduled.count", float64(1), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("faktory.jobs.scheduled", float64(1), gomock.Any(), gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.retries.count", float64(1), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("faktory.jobs.retries", float64(1), gomock.Any(), gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.dead.count", float64(0), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("faktory.jobs.dead", float64(0), gomock.Any(), gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.enqueued.count", float64(8), tags, gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.enqueued.default.count", float64(1), tags, gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("faktory.jobs.enqueued", float64(1), append(tags, "queue:default"), gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.enqueued.default.time", gomock.Any(), tags, gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Timing("jobs.enqueued.default.time_hist", gomock.Any(), tags, gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("faktory.jobs.current_latency", gomock.Any(), append(tags, "queue:default"), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Timing("faktory.jobs.latency", gomock.Any(), append(tags, "queue:default"), gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.enqueued.builds.count", float64(6), tags, gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("faktory.jobs.enqueued", float64(6), append(tags, "queue:builds"), gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.enqueued.builds.time", gomock.Any(), tags, gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Timing("jobs.enqueued.builds.time_hist", gomock.Any(), tags, gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("faktory.jobs.current_latency", gomock.Any(), append(tags, "queue:builds"), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Timing("faktory.jobs.latency", gomock.Any(), append(tags, "queue:builds"), gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.enqueued.tests.count", float64(1), tags, gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("faktory.jobs.enqueued", float64(1), append(tags, "queue:tests"), gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.enqueued.tests.time", gomock.Any(), tags, gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Timing("jobs.enqueued.tests.time_hist", gomock.Any(), tags, gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("faktory.jobs.current_latency", gomock.Any(), append(tags, "queue:tests"), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Timing("faktory.jobs.latency", gomock.Any(), append(tags, "queue:tests"), gomock.Any()).Return(nil).Times(1)
 
 			// create 15 jobs
 			// default queue

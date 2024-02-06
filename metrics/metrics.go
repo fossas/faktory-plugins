@@ -132,6 +132,7 @@ func (m *MetricsSubsystem) createStatsDClient() error {
 func (m *MetricsSubsystem) getTagsFromJob(ctx manager.Context) []string {
 	jobType := fmt.Sprintf("jobtype:%s", ctx.Job().Type)
 	queueName := fmt.Sprintf("queue:%s", ctx.Job().Queue)
+
 	return []string{
 		jobType,
 		queueName,
