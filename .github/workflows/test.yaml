@@ -6,7 +6,6 @@ jobs:
   test:
     strategy:
       matrix:
-        go-version: [1.21.x]
         os: [ubuntu-latest, macos-latest]
       fail-fast: false
 
@@ -14,9 +13,9 @@ jobs:
 
     steps:
       - name: Install Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v6
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version: 1.25.x
 
       - name: Install Linux packages
         if: matrix.os == 'ubuntu-latest'
@@ -27,9 +26,9 @@ jobs:
         run: brew install redis
 
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v6
 
-      - uses: actions/cache@v2
+      - uses: actions/cache@v4
         with:
           # In order:
           # * Module download cache
@@ -39,7 +38,7 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/Library/Caches/go-build
-          key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
+          key: ${{ runner.os }}-go-1.25.x-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-
 

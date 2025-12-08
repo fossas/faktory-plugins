@@ -1,4 +1,6 @@
 .idea
+.claude/
 daemon
 
 dist/
+vendor/
