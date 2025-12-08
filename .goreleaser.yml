@@ -1,3 +1,5 @@
+version: 2
+
 before:
   hooks:
     - go mod tidy
@@ -16,29 +18,27 @@ builds:
 checksum:
   name_template: 'checksums.txt'
 snapshot:
-  name_template: "{{ incpatch .Version }}-next"
+  version_template: "{{ incpatch .Version }}-next"
 changelog:
   sort: asc
   filters:
     exclude:
       - '^docs:'
       - '^test:'
-dockers:
-  - image_templates:
-    - quay.io/fossa/faktory:{{ .Tag }}-amd64
-    use: buildx
-    build_flag_templates:
-      - '--pull'
-      - '--platform=linux/amd64'
-  - image_templates:
-    - quay.io/fossa/faktory:{{ .Tag }}-arm64
-    use: buildx
-    build_flag_templates:
-      - '--pull'
-      - '--platform=linux/arm64'
-    goarch: arm64
-docker_manifests:
-  - name_template: quay.io/fossa/faktory:{{ .Tag }}
-    image_templates:
-      - quay.io/fossa/faktory:{{ .Tag }}-amd64
-      - quay.io/fossa/faktory:{{ .Tag }}-arm64
+dockers_v2:
+  - images:
+      - quay.io/fossa/faktory
+    tags:
+      - "{{ .Tag }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    labels:
+      "org.opencontainers.image.description": "Faktory, with FOSSA plugins"
+      "org.opencontainers.image.created": "{{ .Date }}"
+      "org.opencontainers.image.name": "{{ .ProjectName }}"
+      "org.opencontainers.image.revision": "{{ .FullCommit }}"
+      "org.opencontainers.image.version": "{{ .Version }}"
+      "org.opencontainers.image.source": "{{ .GitURL }}"
+    flags:
+      - "--pull"
