@@ -8,6 +8,7 @@ import (
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/util"
 	"github.com/contribsys/faktory/webui"
+	"github.com/fossas/faktory-plugins/batch"
 	"github.com/fossas/faktory-plugins/cron"
 	"github.com/fossas/faktory-plugins/expire"
 	"github.com/fossas/faktory-plugins/metrics"
@@ -50,6 +51,7 @@ func main() {
 	s.Register(webui.Subsystem(opts.WebBinding))
 
 	// fossa plugins
+	s.Register(new(batch.BatchSubsystem))
 	s.Register(new(uniq.UniqSubsystem))
 	s.Register(new(metrics.MetricsSubsystem))
 	s.Register(new(cron.CronSubsystem))
