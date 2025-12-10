@@ -32,14 +32,6 @@ func TestSubsystemDisabled(t *testing.T) {
 	})
 }
 
-func TestSubsystemOptionsDisabled(t *testing.T) {
-	// Test that options correctly parse disabled state
-	subsystem := &BatchSubsystem{}
-	// Manually test getOptions with a mock config would require more setup
-	// For now, verify the default disabled behavior
-	assert.Nil(t, subsystem.Options)
-}
-
 func TestSubsystemName(t *testing.T) {
 	subsystem := &BatchSubsystem{}
 	assert.Equal(t, "Batch", subsystem.Name())

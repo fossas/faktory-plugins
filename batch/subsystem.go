@@ -11,24 +11,12 @@ var _ server.Subsystem = &BatchSubsystem{}
 // BatchSubsystem implements the Faktory Job Batching feature.
 // It allows grouping jobs into batches with success/complete callbacks.
 type BatchSubsystem struct {
-	Server  *server.Server
-	Options *Options
-}
-
-// Options holds configuration for the batch subsystem
-type Options struct {
-	Enabled bool
+	Server *server.Server
 }
 
 // Start initializes the batch subsystem
 func (b *BatchSubsystem) Start(s *server.Server) error {
 	b.Server = s
-	b.Options = b.getOptions(s)
-
-	if !b.Options.Enabled {
-		util.Info("Batch subsystem is disabled")
-		return nil
-	}
 
 	// Register BATCH command
 	server.CommandSet["BATCH"] = b.batchCommand
@@ -50,25 +38,12 @@ func (b *BatchSubsystem) Name() string {
 
 // Reload reloads the subsystem configuration
 func (b *BatchSubsystem) Reload(s *server.Server) error {
-	b.Options = b.getOptions(s)
 	return nil
 }
 
 // Shutdown gracefully shuts down the subsystem
 func (b *BatchSubsystem) Shutdown(s *server.Server) error {
 	return nil
-}
-
-// getOptions retrieves batch configuration from server options
-func (b *BatchSubsystem) getOptions(s *server.Server) *Options {
-	enabledValue := s.Options.Config("batch", "enabled", false)
-	enabled, ok := enabledValue.(bool)
-	if !ok {
-		enabled = false
-	}
-	return &Options{
-		Enabled: enabled,
-	}
 }
 
 // addMiddleware registers the batch middleware for push, ack, and fail operations
