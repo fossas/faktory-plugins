@@ -88,9 +88,6 @@ func (b *BatchSubsystem) fireCallback(ctx context.Context, s *server.Server, bid
 		return
 	}
 
-	// Mark as enqueued
-	rds.Set(ctx, stateKey, CallbackEnqueued, 0)
-
 	// Get the callback job definition
 	batch, err := getBatch(ctx, s, bid)
 	if err != nil {
@@ -148,6 +145,9 @@ func (b *BatchSubsystem) fireCallback(ctx context.Context, s *server.Server, bid
 		job.Queue = "default"
 	}
 
+	// Mark as enqueued
+	rds.Set(ctx, stateKey, CallbackEnqueued, 0)
+
 	// Push the callback job
 	err = s.Manager().Push(ctx, job)
 	if err != nil {
@@ -157,6 +157,9 @@ func (b *BatchSubsystem) fireCallback(ctx context.Context, s *server.Server, bid
 		rds.Del(ctx, lockKey)
 		return
 	}
+
+	// Release lock
+	rds.Del(ctx, lockKey)
 
 	util.Infof("Enqueued %s callback for batch %s (job %s)", callbackType, bid, job.Jid)
 }
