@@ -6,6 +6,7 @@ import (
 
 	"github.com/contribsys/faktory/server"
 	"github.com/contribsys/faktory/util"
+	"github.com/redis/go-redis/v9"
 )
 
 // addChildBatch adds a child batch to a parent's children set
@@ -79,10 +80,14 @@ func allChildrenCallbackFinished(ctx context.Context, s *server.Server, parentBi
 		}
 
 		state, err := rds.Get(ctx, stateKey).Result()
-		if err != nil {
-			// Child batch might have been cleaned up, treat as finished
+		if err == redis.Nil {
+			// Child batch cleaned up, treat as finished
 			util.Debugf("batch children: child %s state not found, assuming finished", childBid)
 			continue
+		}
+		if err != nil {
+			util.Warnf("batch children: error reading state for child %s: %v", childBid, err)
+			return false // Conservative: don't fire callbacks on Redis error
 		}
 
 		if state == CallbackFinished {
@@ -119,10 +124,11 @@ func allChildrenCallbackFinished(ctx context.Context, s *server.Server, parentBi
 }
 
 // anyChildHasFailures checks if any child batch has failed > 0
-func anyChildHasFailures(ctx context.Context, s *server.Server, parentBid string) bool {
+func anyChildHasFailures(ctx context.Context, s *server.Server, parentBid string) (bool, error) {
 	children, err := getChildBatches(ctx, s, parentBid)
 	if err != nil {
-		return false // On error, don't block (will be re-checked on retry)
+		util.Warnf("batch children: failed to get children for %s: %v", parentBid, err)
+		return false, err
 	}
 
 	for _, childBid := range children {
@@ -131,8 +137,8 @@ func anyChildHasFailures(ctx context.Context, s *server.Server, parentBid string
 			continue
 		}
 		if childStatus.Failed > 0 {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }

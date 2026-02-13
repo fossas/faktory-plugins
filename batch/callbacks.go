@@ -8,6 +8,7 @@ import (
 	"github.com/contribsys/faktory/server"
 	"github.com/contribsys/faktory/util"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 // checkAndFireCallbacks evaluates whether callbacks should fire for a batch
@@ -50,7 +51,8 @@ func (b *BatchSubsystem) checkAndFireCallbacks(ctx context.Context, s *server.Se
 		// Complete must be enqueued (or not defined)
 		completeOk := status.CompleteState == CallbackEnqueued || status.CompleteState == CallbackFinished || !hasCompleteCallback(ctx, s, bid)
 		childrenOk := allChildrenCallbackFinished(ctx, s, bid, "success")
-		noChildFailures := !anyChildHasFailures(ctx, s, bid)
+		childFailures, childErr := anyChildHasFailures(ctx, s, bid)
+		noChildFailures := childErr == nil && !childFailures
 		if completeOk && childrenOk && noChildFailures {
 			b.fireCallback(ctx, s, bid, "success")
 		}
@@ -86,7 +88,12 @@ func (b *BatchSubsystem) fireCallback(ctx context.Context, s *server.Server, bid
 	}
 
 	// Check current state
-	currentState, _ := rds.Get(ctx, stateKey).Result()
+	currentState, err := rds.Get(ctx, stateKey).Result()
+	if err != nil && err != redis.Nil {
+		util.Warnf("batch callbacks: failed to read %s callback state for batch %s: %v", callbackType, bid, err)
+		rds.Del(ctx, lockKey)
+		return
+	}
 	if currentState != CallbackPending {
 		// Already processed
 		return
@@ -266,10 +273,11 @@ func (b *BatchSubsystem) checkBatchCleanup(ctx context.Context, s *server.Server
 	// 2. No success callback defined, OR
 	// 3. failed > 0 (success can never fire because it requires failed == 0), OR
 	// 4. Any child batch has failures (parent success can never fire)
+	childFailures, childErr := anyChildHasFailures(ctx, s, bid)
 	successFinished := status.SuccessState == CallbackFinished ||
 		!hasSuccessCallback(ctx, s, bid) ||
 		status.Failed > 0 ||
-		anyChildHasFailures(ctx, s, bid)
+		(childErr == nil && childFailures)
 
 	if completeFinished && successFinished {
 		// If this batch has a parent, don't delete yet — the parent needs to be able
@@ -319,18 +327,18 @@ func (b *BatchSubsystem) deleteBatchTree(ctx context.Context, s *server.Server, 
 func hasCompleteCallback(ctx context.Context, s *server.Server, bid string) bool {
 	rds := s.Manager().Redis()
 	completeJSON, err := rds.HGet(ctx, batchMetaKey(bid), "complete").Result()
-	if err != nil || completeJSON == "" {
-		return false
+	if err != nil && err != redis.Nil {
+		return true // Assume callback exists on Redis error (conservative for cleanup)
 	}
-	return true
+	return completeJSON != ""
 }
 
 // hasSuccessCallback checks if a batch has a success callback defined
 func hasSuccessCallback(ctx context.Context, s *server.Server, bid string) bool {
 	rds := s.Manager().Redis()
 	successJSON, err := rds.HGet(ctx, batchMetaKey(bid), "success").Result()
-	if err != nil || successJSON == "" {
-		return false
+	if err != nil && err != redis.Nil {
+		return true // Assume callback exists on Redis error (conservative for cleanup)
 	}
-	return true
+	return successJSON != ""
 }

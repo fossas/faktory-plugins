@@ -45,7 +45,7 @@ func (b *BatchSubsystem) pushMiddleware(ctx context.Context, next func() error) 
 	exists, err := batchExists(ctx, b.Server, bid)
 	if err != nil {
 		util.Warnf("batch push middleware: error checking batch %s: %v", bid, err)
-		return next()
+		return manager.Halt("ERR", fmt.Sprintf("transient error checking batch %s, retry push", bid))
 	}
 	if !exists {
 		return manager.Halt("ERR", fmt.Sprintf("batch %s does not exist", bid))
