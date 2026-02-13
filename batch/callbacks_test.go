@@ -39,9 +39,6 @@ func TestCompleteCallback(t *testing.T) {
 			err = cl.Ack(fetchedJob.Jid)
 			require.NoError(t, err)
 
-			// Wait for callback to be enqueued
-			time.Sleep(200 * time.Millisecond)
-
 			// Check that callback was enqueued
 			callbackJob, err := cl.Fetch("callbacks")
 			require.NoError(t, err)
@@ -91,9 +88,6 @@ func TestSuccessCallback(t *testing.T) {
 			err = cl.Ack(fetchedJob.Jid)
 			require.NoError(t, err)
 
-			// Wait for callback to be enqueued
-			time.Sleep(200 * time.Millisecond)
-
 			// Check that callback was enqueued
 			callbackJob, err := cl.Fetch("callbacks")
 			require.NoError(t, err)
@@ -128,9 +122,6 @@ func TestSuccessCallback(t *testing.T) {
 			err = cl.Fail(fetchedJob.Jid, fmt.Errorf("test failure"), nil)
 			require.NoError(t, err)
 
-			// Wait a moment
-			time.Sleep(200 * time.Millisecond)
-
 			// Check that no callback was enqueued
 			callbackJob, err := cl.Fetch("callbacks")
 			require.NoError(t, err)
@@ -149,8 +140,9 @@ func TestSuccessCallback(t *testing.T) {
 
 func TestCallbackOrdering(t *testing.T) {
 	withServer(func(s *server.Server, cl *client.Client) {
-		t.Run("success fires after complete", func(t *testing.T) {
-			// Create batch with both callbacks
+		t.Run("success enqueued after complete enqueued", func(t *testing.T) {
+			// Both callbacks get enqueued in the same checkAndFireCallbacks call
+			// because success fires when CompleteState == CallbackEnqueued
 			result, err := cl.Generic(`BATCH NEW {"success":{"jobtype":"SuccessCallback","queue":"callbacks"},"complete":{"jobtype":"CompleteCallback","queue":"callbacks"}}`)
 			require.NoError(t, err)
 			bid := string(result)
@@ -173,29 +165,55 @@ func TestCallbackOrdering(t *testing.T) {
 			err = cl.Ack(fetchedJob.Jid)
 			require.NoError(t, err)
 
-			// Wait for complete callback to be enqueued
-			time.Sleep(200 * time.Millisecond)
+			// Fetch first callback — should be complete
+			first, err := cl.Fetch("callbacks")
+			require.NoError(t, err)
+			require.NotNil(t, first)
+			assert.Equal(t, "CompleteCallback", first.Type)
 
-			// Fetch complete callback first
+			// Fetch second callback — success should already be enqueued
+			second, err := cl.Fetch("callbacks")
+			require.NoError(t, err)
+			require.NotNil(t, second, "success should be enqueued right after complete")
+			assert.Equal(t, "SuccessCallback", second.Type)
+		})
+
+		t.Run("success fires even if complete already finished", func(t *testing.T) {
+			// Tests the path where CompleteState == CallbackFinished
+			// (complete callback ACK'd before success is checked)
+			result, err := cl.Generic(`BATCH NEW {"success":{"jobtype":"SuccessCallback","queue":"callbacks"},"complete":{"jobtype":"CompleteCallback","queue":"callbacks"}}`)
+			require.NoError(t, err)
+			bid := string(result)
+
+			// Push a job
+			job := client.NewJob("TestJob", 1)
+			job.SetCustom("bid", bid)
+			err = cl.Push(job)
+			require.NoError(t, err)
+
+			// Commit batch
+			_, err = cl.Generic("BATCH COMMIT " + bid)
+			require.NoError(t, err)
+
+			// Fetch and ACK the job
+			fetchedJob, err := cl.Fetch("default")
+			require.NoError(t, err)
+			require.NotNil(t, fetchedJob)
+
+			err = cl.Ack(fetchedJob.Jid)
+			require.NoError(t, err)
+
+			// Fetch the complete callback and ACK it immediately
 			completeCallback, err := cl.Fetch("callbacks")
 			require.NoError(t, err)
 			require.NotNil(t, completeCallback)
 			assert.Equal(t, "CompleteCallback", completeCallback.Type)
 
-			// Success should not be enqueued yet (complete not finished)
-			successCallback, err := cl.Fetch("callbacks")
-			require.NoError(t, err)
-			assert.Nil(t, successCallback, "success should not fire until complete finishes")
-
-			// ACK the complete callback
 			err = cl.Ack(completeCallback.Jid)
 			require.NoError(t, err)
 
-			// Wait for success callback to be enqueued
-			time.Sleep(200 * time.Millisecond)
-
-			// Now success should be enqueued
-			successCallback, err = cl.Fetch("callbacks")
+			// Success should fire because CompleteState == CallbackFinished
+			successCallback, err := cl.Fetch("callbacks")
 			require.NoError(t, err)
 			require.NotNil(t, successCallback, "success should fire after complete finishes")
 			assert.Equal(t, "SuccessCallback", successCallback.Type)
@@ -214,9 +232,6 @@ func TestEmptyBatchCallback(t *testing.T) {
 			// Commit batch without pushing any jobs
 			_, err = cl.Generic("BATCH COMMIT " + bid)
 			require.NoError(t, err)
-
-			// Wait for callback to be enqueued
-			time.Sleep(200 * time.Millisecond)
 
 			// Check that callback was enqueued
 			callbackJob, err := cl.Fetch("callbacks")
@@ -284,9 +299,6 @@ func TestCompleteCallbackWaitsForAllJobs(t *testing.T) {
 			err = cl.Fail(fetchedJobA.Jid, fmt.Errorf("job A failed"), nil)
 			require.NoError(t, err)
 
-			// Wait for fail middleware to process
-			time.Sleep(200 * time.Millisecond)
-
 			// Verify state: pending=1 (job A failed once, job B still running)
 			statusResult, err = cl.Generic("BATCH STATUS " + bid)
 			require.NoError(t, err)
@@ -304,9 +316,6 @@ func TestCompleteCallbackWaitsForAllJobs(t *testing.T) {
 			// Now ACK job B (pending should go to 0)
 			err = cl.Ack(fetchedJobB.Jid)
 			require.NoError(t, err)
-
-			// Wait for ack middleware to process
-			time.Sleep(200 * time.Millisecond)
 
 			// Verify state: pending=0
 			statusResult, err = cl.Generic("BATCH STATUS " + bid)
@@ -376,4 +385,3 @@ func TestNoDoubleCallback(t *testing.T) {
 		})
 	})
 }
-

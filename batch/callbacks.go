@@ -44,10 +44,10 @@ func (b *BatchSubsystem) checkAndFireCallbacks(ctx context.Context, s *server.Se
 	}
 
 	// Check success callback
-	// Fires when: pending == 0 AND failed == 0 AND complete callback finished (or not defined) AND all children's success callbacks finished
+	// Fires when: pending == 0 AND failed == 0 AND complete callback enqueued (or not defined) AND all children's success callbacks finished
 	if status.Pending == 0 && status.Failed == 0 && status.SuccessState == CallbackPending {
-		// Complete must be finished (or not defined)
-		completeOk := status.CompleteState == CallbackFinished || !hasCompleteCallback(ctx, s, bid)
+		// Complete must be enqueued (or not defined)
+		completeOk := status.CompleteState == CallbackEnqueued || status.CompleteState == CallbackFinished || !hasCompleteCallback(ctx, s, bid)
 		childrenOk := allChildrenCallbackFinished(ctx, s, bid, "success")
 		if completeOk && childrenOk {
 			b.fireCallback(ctx, s, bid, "success")

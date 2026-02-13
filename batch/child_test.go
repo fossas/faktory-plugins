@@ -2,7 +2,6 @@ package batch
 
 import (
 	"testing"
-	"time"
 
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/server"
@@ -73,9 +72,6 @@ func TestChildBlocksParentCallback(t *testing.T) {
 			err = cl.Ack(fetchedParentJob.Jid)
 			require.NoError(t, err)
 
-			// Wait a moment
-			time.Sleep(200 * time.Millisecond)
-
 			// Parent callback should not fire yet (child not done)
 			parentCallback, err := cl.Fetch("callbacks")
 			require.NoError(t, err)
@@ -88,9 +84,6 @@ func TestChildBlocksParentCallback(t *testing.T) {
 			err = cl.Ack(fetchedChildJob.Jid)
 			require.NoError(t, err)
 
-			// Wait for child callback
-			time.Sleep(200 * time.Millisecond)
-
 			// Child callback should fire
 			childCallback, err := cl.Fetch("callbacks")
 			require.NoError(t, err)
@@ -100,9 +93,6 @@ func TestChildBlocksParentCallback(t *testing.T) {
 			// ACK child callback
 			err = cl.Ack(childCallback.Jid)
 			require.NoError(t, err)
-
-			// Wait for parent callback
-			time.Sleep(200 * time.Millisecond)
 
 			// Now parent callback should fire
 			parentCallback, err = cl.Fetch("callbacks")
@@ -139,9 +129,6 @@ func TestNestedBatches(t *testing.T) {
 			_, err = cl.Generic("BATCH COMMIT " + grandparentBid)
 			require.NoError(t, err)
 
-			// Wait for child callback (should fire first since empty)
-			time.Sleep(200 * time.Millisecond)
-
 			// Child callback should fire first
 			callback1, err := cl.Fetch("callbacks")
 			require.NoError(t, err)
@@ -152,9 +139,6 @@ func TestNestedBatches(t *testing.T) {
 			err = cl.Ack(callback1.Jid)
 			require.NoError(t, err)
 
-			// Wait for parent callback
-			time.Sleep(200 * time.Millisecond)
-
 			// Parent callback should fire next
 			callback2, err := cl.Fetch("callbacks")
 			require.NoError(t, err)
@@ -164,9 +148,6 @@ func TestNestedBatches(t *testing.T) {
 			// ACK parent callback
 			err = cl.Ack(callback2.Jid)
 			require.NoError(t, err)
-
-			// Wait for grandparent callback
-			time.Sleep(200 * time.Millisecond)
 
 			// Grandparent callback should fire last
 			callback3, err := cl.Fetch("callbacks")
