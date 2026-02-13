@@ -2,32 +2,49 @@ package batch
 
 import (
 	"context"
+
+	"github.com/contribsys/faktory/util"
 )
 
-// cleanupTask is a background task that can be used for batch maintenance
-// Note: Batch cleanup happens automatically when callbacks complete (in callbacks.go)
-// This task is primarily for monitoring and stats
-type cleanupTask struct {
-	subsystem *BatchSubsystem
-	cycles    int64
+// batchSweepTask is a background task that periodically re-checks committed
+// batches and fires any callbacks that should have fired but didn't (e.g. due
+// to a transient Redis error or crash during processing).
+type batchSweepTask struct {
+	subsystem     *BatchSubsystem
+	sweeps        int64
+	batchesChecked int64
 }
 
 // Name returns the name of the task
-func (t *cleanupTask) Name() string {
-	return "BatchMaintenance"
+func (t *batchSweepTask) Name() string {
+	return "Batch callback sweep"
 }
 
-// Execute runs the maintenance task
-func (t *cleanupTask) Execute(ctx context.Context) error {
-	t.cycles++
-	// Batch cleanup happens automatically when callbacks complete
-	// This task is reserved for future maintenance needs
+// Execute runs the sweep task
+func (t *batchSweepTask) Execute(ctx context.Context) error {
+	t.sweeps++
+
+	s := t.subsystem.Server
+	redis := s.Manager().Redis()
+
+	bids, err := redis.SMembers(ctx, batchCommittedSetKey()).Result()
+	if err != nil {
+		util.Warnf("Batch sweep: failed to read committed set: %v", err)
+		return nil
+	}
+
+	for _, bid := range bids {
+		t.batchesChecked++
+		t.subsystem.checkAndFireCallbacks(ctx, s, bid)
+	}
+
 	return nil
 }
 
 // Stats returns statistics about the task
-func (t *cleanupTask) Stats(ctx context.Context) map[string]interface{} {
+func (t *batchSweepTask) Stats(ctx context.Context) map[string]interface{} {
 	return map[string]interface{}{
-		"cycles": t.cycles,
+		"sweeps":         t.sweeps,
+		"batches_checked": t.batchesChecked,
 	}
 }

@@ -25,7 +25,7 @@ func (b *BatchSubsystem) Start(s *server.Server) error {
 	b.addMiddleware()
 
 	// Register cleanup task
-	s.AddTask(60, &cleanupTask{subsystem: b})
+	s.AddTask(60, &batchSweepTask{subsystem: b})
 
 	util.Info("Loaded batch jobs plugin")
 	return nil

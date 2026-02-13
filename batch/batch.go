@@ -63,6 +63,10 @@ func batchChildrenKey(bid string) string {
 	return fmt.Sprintf("%s:children", batchKey(bid))
 }
 
+func batchCommittedSetKey() string {
+	return "batches:committed"
+}
+
 // generateBid creates a new batch ID with the "b-" prefix
 func generateBid() string {
 	return "b-" + client.RandomJid()
@@ -255,7 +259,10 @@ func setCommitted(ctx context.Context, s *server.Server, bid string) error {
 	}
 
 	redis := s.Manager().Redis()
-	return redis.HSet(ctx, batchMetaKey(bid), "committed", IsCommitted).Err()
+	if err := redis.HSet(ctx, batchMetaKey(bid), "committed", IsCommitted).Err(); err != nil {
+		return err
+	}
+	return redis.SAdd(ctx, batchCommittedSetKey(), bid).Err()
 }
 
 // deleteBatch removes all Redis keys associated with a batch
@@ -278,6 +285,8 @@ func deleteBatch(ctx context.Context, s *server.Server, bid string) error {
 	if err != nil {
 		return fmt.Errorf("failed to delete batch: %w", err)
 	}
+
+	redis.SRem(ctx, batchCommittedSetKey(), bid)
 
 	util.Debugf("Deleted batch %s", bid)
 	return nil
