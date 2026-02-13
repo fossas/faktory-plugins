@@ -6,7 +6,23 @@ import (
 
 	"github.com/contribsys/faktory/manager"
 	"github.com/contribsys/faktory/util"
+	"github.com/redis/go-redis/v9"
 )
+
+// pushToMatchLua atomically checks that callback states are both pending (""),
+// then increments total and pending counters. Returns 1 on success, 0 if
+// callbacks have already started.
+// KEYS[1] = complete_st, KEYS[2] = success_st, KEYS[3] = total, KEYS[4] = pending
+var pushToMatchLua = redis.NewScript(`
+	local complete_st = redis.call("GET", KEYS[1]) or ""
+	local success_st = redis.call("GET", KEYS[2]) or ""
+	if complete_st ~= "" or success_st ~= "" then
+		return 0
+	end
+	redis.call("INCR", KEYS[3])
+	redis.call("INCR", KEYS[4])
+	return 1
+`)
 
 // pushMiddleware tracks jobs being added to a batch
 func (b *BatchSubsystem) pushMiddleware(ctx context.Context, next func() error) error {
@@ -35,25 +51,24 @@ func (b *BatchSubsystem) pushMiddleware(ctx context.Context, next func() error) 
 		return manager.Halt("ERR", fmt.Sprintf("batch %s does not exist", bid))
 	}
 
-	// Check callbacks haven't started
-	status, err := getBatchStatus(ctx, b.Server, bid)
-	if err != nil {
-		util.Warnf("batch push middleware: error getting batch status %s: %v", bid, err)
-		return next()
-	}
-	if status.CompleteState != CallbackPending || status.SuccessState != CallbackPending {
-		return manager.Halt("ERR", "cannot add jobs to batch after callbacks have started")
-	}
-
-	// Increment total and pending counters atomically
-	redis := b.Server.Manager().Redis()
-	pipe := redis.Pipeline()
-	pipe.Incr(ctx, batchTotalKey(bid))
-	pipe.Incr(ctx, batchPendingKey(bid))
-	_, err = pipe.Exec(ctx)
+	// Atomically check callback state and increment counters using a Lua script.
+	// This prevents a TOCTOU race where a concurrent checkAndFireCallbacks could
+	// see pending==0 and fire callbacks between our state check and counter increment.
+	rds := b.Server.Manager().Redis()
+	result, err := pushToMatchLua.Run(ctx, rds,
+		[]string{
+			batchCompleteStateKey(bid),
+			batchSuccessStateKey(bid),
+			batchTotalKey(bid),
+			batchPendingKey(bid),
+		},
+	).Int64()
 	if err != nil {
 		util.Warnf("batch push middleware: failed to update counters for batch %s: %v", bid, err)
 		return manager.Halt("ERR", "failed to update counters for batch")
+	}
+	if result == 0 {
+		return manager.Halt("ERR", "cannot add jobs to batch after callbacks have started")
 	}
 
 	util.Debugf("Added job %s to batch %s", job.Jid, bid)
@@ -118,6 +133,16 @@ func (b *BatchSubsystem) failMiddleware(ctx context.Context, next func() error) 
 		return err
 	}
 
+	// Handle callback job failure
+	if cbType, ok := job.GetCustom("_cb"); ok {
+		if bidValue, ok := job.GetCustom("_bid"); ok {
+			bid, _ := bidValue.(string)
+			cbTypeStr, _ := cbType.(string)
+			b.handleCallbackFailure(ctx, job, bid, cbTypeStr)
+		}
+		return nil
+	}
+
 	// Only count batch jobs
 	bidValue, ok := job.GetCustom("bid")
 	if !ok {
@@ -139,12 +164,18 @@ func (b *BatchSubsystem) failMiddleware(ctx context.Context, next func() error) 
 	// 2. Failure.RetryRemaining == 0 (exhausted all retries)
 	// Note: Retry == nil means use server default (25 retries), NOT terminal
 	isTerminalFailure := false
-	if job.Retry != nil && *job.Retry == 0 {
-		// Explicitly configured with no retries
+	if job.Retry != nil && *job.Retry <= 0 {
+		// Explicitly configured with no retries (0) or direct-to-morgue (-1)
 		isTerminalFailure = true
 	} else if job.Failure != nil && job.Failure.RetryRemaining == 0 {
 		// Exhausted all retries
 		isTerminalFailure = true
+	}
+
+	// Non-first, non-terminal failure: nothing to update, no need to check callbacks
+	if !isFirstExecution && !isTerminalFailure {
+		util.Debugf("Job %s in batch %s failed (retry, will try again)", job.Jid, bid)
+		return nil
 	}
 
 	redis := b.Server.Manager().Redis()
@@ -161,8 +192,6 @@ func (b *BatchSubsystem) failMiddleware(ctx context.Context, next func() error) 
 	if isTerminalFailure {
 		pipe.Incr(ctx, batchFailedKey(bid))
 		util.Debugf("Job %s in batch %s failed terminally", job.Jid, bid)
-	} else if !isFirstExecution {
-		util.Debugf("Job %s in batch %s failed (retry, will try again)", job.Jid, bid)
 	}
 
 	_, err = pipe.Exec(ctx)

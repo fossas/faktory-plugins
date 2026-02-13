@@ -52,12 +52,15 @@ func getChildBatches(ctx context.Context, s *server.Server, parentBid string) ([
 	return children, nil
 }
 
-// allChildrenCallbackFinished checks if all child batches have finished the specified callback type
+// allChildrenCallbackFinished checks if all child batches have finished the specified callback type.
+// For "success" callbacks, a child with failed > 0 is treated as "done" because its success
+// callback can never fire. Use anyChildHasFailures separately to decide if the parent's
+// own success callback should fire.
 func allChildrenCallbackFinished(ctx context.Context, s *server.Server, parentBid string, callbackType string) bool {
 	children, err := getChildBatches(ctx, s, parentBid)
 	if err != nil {
 		util.Warnf("batch children: failed to get children for %s: %v", parentBid, err)
-		return true // Assume no children on error
+		return false // Return false on error to prevent premature callback firing; will be retried on next job ACK/FAIL
 	}
 
 	if len(children) == 0 {
@@ -86,6 +89,17 @@ func allChildrenCallbackFinished(ctx context.Context, s *server.Server, parentBi
 			continue
 		}
 
+		// For success callbacks: if child has failed > 0, the success callback
+		// will never fire (it requires failed == 0). Treat as "done" so we
+		// don't block the parent forever.
+		if callbackType == "success" {
+			childStatus, statusErr := getBatchStatus(ctx, s, childBid)
+			if statusErr == nil && childStatus.Failed > 0 {
+				util.Debugf("batch children: child %s has failures, success callback will never fire", childBid)
+				continue
+			}
+		}
+
 		// Check if child has this callback type defined
 		var hasCallback bool
 		if callbackType == "complete" {
@@ -102,4 +116,23 @@ func allChildrenCallbackFinished(ctx context.Context, s *server.Server, parentBi
 
 	util.Debugf("batch children: all children of %s have finished %s callbacks", parentBid, callbackType)
 	return true
+}
+
+// anyChildHasFailures checks if any child batch has failed > 0
+func anyChildHasFailures(ctx context.Context, s *server.Server, parentBid string) bool {
+	children, err := getChildBatches(ctx, s, parentBid)
+	if err != nil {
+		return false // On error, don't block (will be re-checked on retry)
+	}
+
+	for _, childBid := range children {
+		childStatus, err := getBatchStatus(ctx, s, childBid)
+		if err != nil {
+			continue
+		}
+		if childStatus.Failed > 0 {
+			return true
+		}
+	}
+	return false
 }

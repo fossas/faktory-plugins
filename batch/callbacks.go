@@ -2,6 +2,7 @@ package batch
 
 import (
 	"context"
+	"time"
 
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/server"
@@ -44,12 +45,13 @@ func (b *BatchSubsystem) checkAndFireCallbacks(ctx context.Context, s *server.Se
 	}
 
 	// Check success callback
-	// Fires when: pending == 0 AND failed == 0 AND complete callback enqueued (or not defined) AND all children's success callbacks finished
+	// Fires when: pending == 0 AND failed == 0 AND no child failures AND complete callback enqueued (or not defined) AND all children's success callbacks finished
 	if status.Pending == 0 && status.Failed == 0 && status.SuccessState == CallbackPending {
 		// Complete must be enqueued (or not defined)
 		completeOk := status.CompleteState == CallbackEnqueued || status.CompleteState == CallbackFinished || !hasCompleteCallback(ctx, s, bid)
 		childrenOk := allChildrenCallbackFinished(ctx, s, bid, "success")
-		if completeOk && childrenOk {
+		noChildFailures := !anyChildHasFailures(ctx, s, bid)
+		if completeOk && childrenOk && noChildFailures {
 			b.fireCallback(ctx, s, bid, "success")
 		}
 	}
@@ -70,8 +72,10 @@ func (b *BatchSubsystem) fireCallback(ctx context.Context, s *server.Server, bid
 	// Use a lock key to prevent double-firing
 	lockKey := stateKey + ":lock"
 
-	// Try to acquire lock atomically using SetNX
-	acquired, err := rds.SetNX(ctx, lockKey, "1", 0).Result()
+	// Try to acquire lock atomically using SetNX with TTL to prevent permanent stuck
+	// state if the process crashes while holding the lock. The state-check at line 85-88
+	// provides idempotency, so a retry after lock expiry is safe.
+	acquired, err := rds.SetNX(ctx, lockKey, "1", 5*time.Minute).Result()
 	if err != nil {
 		util.Warnf("batch callbacks: failed to acquire lock for %s callback on batch %s: %v", callbackType, bid, err)
 		return
@@ -145,18 +149,20 @@ func (b *BatchSubsystem) fireCallback(ctx context.Context, s *server.Server, bid
 		job.Queue = "default"
 	}
 
-	// Mark as enqueued
-	rds.Set(ctx, stateKey, CallbackEnqueued, 0)
-
-	// Push the callback job
+	// Push the callback job first, then mark as enqueued.
+	// This ordering prevents a stuck state if the process crashes: if we set state
+	// to Enqueued first and crash before Push, the callback would never be delivered.
+	// The lock prevents double-push during the window where state is still Pending.
 	err = s.Manager().Push(ctx, job)
 	if err != nil {
 		util.Warnf("batch callbacks: failed to enqueue %s callback for batch %s: %v", callbackType, bid, err)
-		// Reset state and release lock to allow retry
-		rds.Set(ctx, stateKey, CallbackPending, 0)
+		// Release lock to allow retry
 		rds.Del(ctx, lockKey)
 		return
 	}
+
+	// Mark as enqueued after successful push
+	rds.Set(ctx, stateKey, CallbackEnqueued, 0)
 
 	// Release lock
 	rds.Del(ctx, lockKey)
@@ -183,6 +189,41 @@ func (b *BatchSubsystem) handleCallbackComplete(ctx context.Context, bid string,
 	}
 
 	util.Debugf("batch %s %s callback completed", bid, callbackType)
+
+	b.checkPostCallback(ctx, b.Server, bid, callbackType)
+}
+
+// handleCallbackFailure is called when a callback job terminally fails.
+// It marks the callback as finished so the batch can progress or be cleaned up,
+// preventing the batch from being stuck forever when a callback goes to the morgue.
+func (b *BatchSubsystem) handleCallbackFailure(ctx context.Context, job *client.Job, bid string, callbackType string) {
+	// Determine if this is a terminal failure
+	isTerminal := false
+	if job.Retry != nil && *job.Retry <= 0 {
+		isTerminal = true
+	} else if job.Failure != nil && job.Failure.RetryRemaining == 0 {
+		isTerminal = true
+	}
+
+	if !isTerminal {
+		return
+	}
+
+	util.Warnf("batch %s %s callback job failed terminally, marking as finished", bid, callbackType)
+
+	rds := b.Server.Manager().Redis()
+	var stateKey string
+	if callbackType == "complete" {
+		stateKey = batchCompleteStateKey(bid)
+	} else {
+		stateKey = batchSuccessStateKey(bid)
+	}
+
+	err := rds.Set(ctx, stateKey, CallbackFinished, 0).Err()
+	if err != nil {
+		util.Warnf("batch callbacks: failed to mark %s callback as finished for batch %s: %v", callbackType, bid, err)
+		return
+	}
 
 	b.checkPostCallback(ctx, b.Server, bid, callbackType)
 }
@@ -223,18 +264,54 @@ func (b *BatchSubsystem) checkBatchCleanup(ctx context.Context, s *server.Server
 	// Success is "finished" if:
 	// 1. SuccessState == CallbackFinished (it ran), OR
 	// 2. No success callback defined, OR
-	// 3. failed > 0 (success can never fire because it requires failed == 0)
+	// 3. failed > 0 (success can never fire because it requires failed == 0), OR
+	// 4. Any child batch has failures (parent success can never fire)
 	successFinished := status.SuccessState == CallbackFinished ||
 		!hasSuccessCallback(ctx, s, bid) ||
-		status.Failed > 0
+		status.Failed > 0 ||
+		anyChildHasFailures(ctx, s, bid)
 
 	if completeFinished && successFinished {
-		util.Debugf("batch %s is fully complete, scheduling cleanup", bid)
-		// Delete batch data
-		err := deleteBatch(ctx, s, bid)
+		// If this batch has a parent, don't delete yet — the parent needs to be able
+		// to observe this child's callback state. Instead, only delete when the parent
+		// is also being cleaned up (the parent's cleanup will delete children).
+		batch, err := getBatch(ctx, s, bid)
 		if err != nil {
-			util.Warnf("batch cleanup: failed to delete batch %s: %v", bid, err)
+			util.Warnf("batch cleanup: failed to get batch %s: %v", bid, err)
+			return
 		}
+		if batch.ParentBid != "" {
+			parentExists, err := batchExists(ctx, s, batch.ParentBid)
+			if err != nil {
+				util.Warnf("batch cleanup: failed to check parent %s: %v", batch.ParentBid, err)
+				return
+			}
+			if parentExists {
+				util.Debugf("batch %s is fully complete but parent %s still exists, deferring cleanup", bid, batch.ParentBid)
+				return
+			}
+		}
+
+		util.Debugf("batch %s is fully complete, scheduling cleanup", bid)
+		// Delete batch data and all child batches
+		b.deleteBatchTree(ctx, s, bid)
+	}
+}
+
+// deleteBatchTree deletes a batch and all of its child batches recursively
+func (b *BatchSubsystem) deleteBatchTree(ctx context.Context, s *server.Server, bid string) {
+	// Delete children first
+	children, err := getChildBatches(ctx, s, bid)
+	if err == nil {
+		for _, childBid := range children {
+			b.deleteBatchTree(ctx, s, childBid)
+		}
+	}
+
+	// Delete this batch
+	err = deleteBatch(ctx, s, bid)
+	if err != nil {
+		util.Warnf("batch cleanup: failed to delete batch %s: %v", bid, err)
 	}
 }
 

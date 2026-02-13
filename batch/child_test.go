@@ -1,7 +1,9 @@
 package batch
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/server"
@@ -99,6 +101,96 @@ func TestChildBlocksParentCallback(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, parentCallback, "parent callback should fire after child callback")
 			assert.Equal(t, "ParentCallback", parentCallback.Type)
+		})
+	})
+}
+
+func TestChildFailureBlocksParentSuccess(t *testing.T) {
+	withServer(func(s *server.Server, cl *client.Client) {
+		t.Run("parent success callback does not fire when child has failures", func(t *testing.T) {
+			// BUG 3: Child batch with failures should prevent parent success callback.
+			// Previously, the child would be deleted (because failed>0 meant success
+			// would never fire), and the parent couldn't see the child's failure state.
+
+			// Create parent batch with success callback
+			parentResult, err := cl.Generic(`BATCH NEW {"success":{"jobtype":"ParentSuccess","queue":"callbacks"},"complete":{"jobtype":"ParentComplete","queue":"callbacks"}}`)
+			require.NoError(t, err)
+			parentBid := string(parentResult)
+
+			// Create child batch with success and complete callbacks
+			childResult, err := cl.Generic(`BATCH NEW {"parent_bid":"` + parentBid + `","success":{"jobtype":"ChildSuccess","queue":"callbacks"},"complete":{"jobtype":"ChildComplete","queue":"callbacks"}}`)
+			require.NoError(t, err)
+			childBid := string(childResult)
+
+			// Push jobs to separate queues so we can fetch them independently
+			childJob := client.NewJob("ChildJob", 1)
+			childJob.Queue = "child_jobs"
+			childJob.SetCustom("bid", childBid)
+			retry := 0
+			childJob.Retry = &retry
+			err = cl.Push(childJob)
+			require.NoError(t, err)
+
+			parentJob := client.NewJob("ParentJob", 1)
+			parentJob.Queue = "parent_jobs"
+			parentJob.SetCustom("bid", parentBid)
+			err = cl.Push(parentJob)
+			require.NoError(t, err)
+
+			// Commit both batches
+			_, err = cl.Generic("BATCH COMMIT " + childBid)
+			require.NoError(t, err)
+			_, err = cl.Generic("BATCH COMMIT " + parentBid)
+			require.NoError(t, err)
+
+			// Complete parent job
+			fetchedParentJob, err := cl.Fetch("parent_jobs")
+			require.NoError(t, err)
+			require.NotNil(t, fetchedParentJob)
+			err = cl.Ack(fetchedParentJob.Jid)
+			require.NoError(t, err)
+
+			// Fail child job terminally
+			fetchedChildJob, err := cl.Fetch("child_jobs")
+			require.NoError(t, err)
+			require.NotNil(t, fetchedChildJob)
+			err = cl.Fail(fetchedChildJob.Jid, fmt.Errorf("terminal failure"), nil)
+			require.NoError(t, err)
+
+			// Wait for processing
+			time.Sleep(300 * time.Millisecond)
+
+			// Child complete callback should fire (pending=0 after first execution)
+			childComplete, err := cl.Fetch("callbacks")
+			require.NoError(t, err)
+			require.NotNil(t, childComplete, "child complete callback should fire")
+			assert.Equal(t, "ChildComplete", childComplete.Type)
+
+			// ACK child complete callback
+			err = cl.Ack(childComplete.Jid)
+			require.NoError(t, err)
+
+			// Wait for processing
+			time.Sleep(300 * time.Millisecond)
+
+			// Parent complete callback should fire (all children's complete callbacks finished)
+			parentComplete, err := cl.Fetch("callbacks")
+			require.NoError(t, err)
+			require.NotNil(t, parentComplete, "parent complete callback should fire")
+			assert.Equal(t, "ParentComplete", parentComplete.Type)
+
+			// ACK parent complete callback
+			err = cl.Ack(parentComplete.Jid)
+			require.NoError(t, err)
+
+			// Wait for processing
+			time.Sleep(300 * time.Millisecond)
+
+			// Child had failures, so child success callback should NOT fire.
+			// Parent success callback should also NOT fire because child had failures.
+			remaining, err := cl.Fetch("callbacks")
+			require.NoError(t, err)
+			assert.Nil(t, remaining, "parent success callback should not fire when child had failures")
 		})
 	})
 }
