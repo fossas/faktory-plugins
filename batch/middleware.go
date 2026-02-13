@@ -53,7 +53,7 @@ func (b *BatchSubsystem) pushMiddleware(ctx context.Context, next func() error) 
 	_, err = pipe.Exec(ctx)
 	if err != nil {
 		util.Warnf("batch push middleware: failed to update counters for batch %s: %v", bid, err)
-		// Don't block the job push on counter update failure
+		return manager.Halt("ERR", "failed to update counters for batch")
 	}
 
 	util.Debugf("Added job %s to batch %s", job.Jid, bid)
