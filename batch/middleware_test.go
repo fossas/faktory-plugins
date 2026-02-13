@@ -330,4 +330,3 @@ func TestFailMiddleware(t *testing.T) {
 		})
 	})
 }
-

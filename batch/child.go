@@ -9,6 +9,19 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// addChildLua atomically checks that callback states are both pending (""),
+// then adds the child to the parent's children set. Returns 1 on success,
+// 0 if callbacks have already started.
+// KEYS[1] = complete_st, KEYS[2] = success_st, KEYS[3] = children set
+// ARGV[1] = child bid
+var addChildLua = redis.NewScript(`
+	local cs = redis.call("GET", KEYS[1]) or ""
+	local ss = redis.call("GET", KEYS[2]) or ""
+	if cs ~= "" or ss ~= "" then return 0 end
+	redis.call("SADD", KEYS[3], ARGV[1])
+	return 1
+`)
+
 // addChildBatch adds a child batch to a parent's children set
 func addChildBatch(ctx context.Context, s *server.Server, parentBid, childBid string) error {
 	// Verify parent exists
@@ -20,24 +33,32 @@ func addChildBatch(ctx context.Context, s *server.Server, parentBid, childBid st
 		return fmt.Errorf("parent batch %s not found", parentBid)
 	}
 
-	// Verify parent callbacks haven't started
-	status, err := getBatchStatus(ctx, s, parentBid)
-	if err != nil {
-		return fmt.Errorf("failed to get parent batch status: %w", err)
-	}
-	if status.CompleteState != CallbackPending || status.SuccessState != CallbackPending {
-		return fmt.Errorf("cannot add child batch after parent callbacks have started")
-	}
-
-	// Add child to parent's children set
+	// Atomically check callback state and add child to parent's children set.
+	// This prevents a TOCTOU race where callbacks could fire between our state
+	// check and the SADD.
 	rds := s.Manager().Redis()
-	err = rds.SAdd(ctx, batchChildrenKey(parentBid), childBid).Err()
+	result, err := addChildLua.Run(ctx, rds,
+		[]string{
+			batchCompleteStateKey(parentBid),
+			batchSuccessStateKey(parentBid),
+			batchChildrenKey(parentBid),
+		},
+		childBid,
+	).Int64()
 	if err != nil {
 		return fmt.Errorf("failed to add child to parent: %w", err)
 	}
+	if result == 0 {
+		return fmt.Errorf("cannot add child batch after parent callbacks have started")
+	}
 
-	// Set TTL on children key (will be persisted when parent commits)
-	rds.Expire(ctx, batchChildrenKey(parentBid), BatchTTL)
+	// Only set TTL on children key if parent is not yet committed.
+	// Committed parents have persistent keys; re-applying TTL would cause
+	// the children key to expire prematurely.
+	committed, _ := isCommitted(ctx, s, parentBid)
+	if !committed {
+		rds.Expire(ctx, batchChildrenKey(parentBid), BatchTTL)
+	}
 
 	util.Debugf("Added child batch %s to parent %s", childBid, parentBid)
 	return nil
@@ -131,14 +152,16 @@ func anyChildHasFailures(ctx context.Context, s *server.Server, parentBid string
 		return false, err
 	}
 
+	var lastErr error
 	for _, childBid := range children {
 		childStatus, err := getBatchStatus(ctx, s, childBid)
 		if err != nil {
+			lastErr = err
 			continue
 		}
 		if childStatus.Failed > 0 {
 			return true, nil
 		}
 	}
-	return false, nil
+	return false, lastErr
 }

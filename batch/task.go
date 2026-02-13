@@ -10,8 +10,8 @@ import (
 // batches and fires any callbacks that should have fired but didn't (e.g. due
 // to a transient Redis error or crash during processing).
 type batchSweepTask struct {
-	subsystem     *BatchSubsystem
-	sweeps        int64
+	subsystem      *BatchSubsystem
+	sweeps         int64
 	batchesChecked int64
 }
 
@@ -44,7 +44,7 @@ func (t *batchSweepTask) Execute(ctx context.Context) error {
 // Stats returns statistics about the task
 func (t *batchSweepTask) Stats(ctx context.Context) map[string]interface{} {
 	return map[string]interface{}{
-		"sweeps":         t.sweeps,
+		"sweeps":          t.sweeps,
 		"batches_checked": t.batchesChecked,
 	}
 }

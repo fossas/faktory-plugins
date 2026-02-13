@@ -10,6 +10,7 @@ import (
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/server"
 	"github.com/contribsys/faktory/util"
+	"github.com/redis/go-redis/v9"
 )
 
 // Committed state constants
@@ -224,45 +225,42 @@ func isCommitted(ctx context.Context, s *server.Server, bid string) (bool, error
 	return committed == IsCommitted, nil
 }
 
-// persistBatch removes TTL from all batch keys, making them permanent.
-// This is called when a batch is committed.
-func persistBatch(ctx context.Context, s *server.Server, bid string) error {
-	redis := s.Manager().Redis()
+// setCommittedLua atomically persists all batch keys (removes TTL), sets the
+// committed flag, and adds the batch to the committed set. This prevents
+// partial failure where keys are persisted but the batch is never marked
+// committed, which would leave permanently orphaned keys.
+// KEYS[1..7] = batch keys to persist, KEYS[8] = committed set key
+// ARGV[1] = bid
+var setCommittedLua = redis.NewScript(`
+	for i = 1, 7 do
+		redis.call("PERSIST", KEYS[i])
+	end
+	redis.call("HSET", KEYS[1], "committed", "1")
+	redis.call("SADD", KEYS[8], ARGV[1])
+	return 1
+`)
 
-	keys := []string{
-		batchMetaKey(bid),
-		batchTotalKey(bid),
-		batchPendingKey(bid),
-		batchFailedKey(bid),
-		batchCompleteStateKey(bid),
-		batchSuccessStateKey(bid),
-		batchChildrenKey(bid),
-	}
-
-	pipe := redis.Pipeline()
-	for _, key := range keys {
-		pipe.Persist(ctx, key)
-	}
-	_, err := pipe.Exec(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to persist batch keys: %w", err)
-	}
-
-	return nil
-}
-
-// setCommitted marks a batch as committed and removes TTL from all keys
+// setCommitted atomically marks a batch as committed, removes TTL from all
+// keys, and adds it to the committed set.
 func setCommitted(ctx context.Context, s *server.Server, bid string) error {
-	// Remove TTL from all batch keys
-	if err := persistBatch(ctx, s, bid); err != nil {
-		return err
+	rds := s.Manager().Redis()
+	_, err := setCommittedLua.Run(ctx, rds,
+		[]string{
+			batchMetaKey(bid),          // KEYS[1]
+			batchTotalKey(bid),         // KEYS[2]
+			batchPendingKey(bid),       // KEYS[3]
+			batchFailedKey(bid),        // KEYS[4]
+			batchCompleteStateKey(bid), // KEYS[5]
+			batchSuccessStateKey(bid),  // KEYS[6]
+			batchChildrenKey(bid),      // KEYS[7]
+			batchCommittedSetKey(),     // KEYS[8]
+		},
+		bid,
+	).Result()
+	if err != nil {
+		return fmt.Errorf("failed to commit batch: %w", err)
 	}
-
-	redis := s.Manager().Redis()
-	if err := redis.HSet(ctx, batchMetaKey(bid), "committed", IsCommitted).Err(); err != nil {
-		return err
-	}
-	return redis.SAdd(ctx, batchCommittedSetKey(), bid).Err()
+	return nil
 }
 
 // deleteBatch removes all Redis keys associated with a batch
