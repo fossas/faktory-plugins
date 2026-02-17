@@ -56,8 +56,10 @@ func addChildBatch(ctx context.Context, s *server.Server, parentBid, childBid st
 	// Only set TTL on children key if parent is not yet committed.
 	// Committed parents have persistent keys; re-applying TTL would cause
 	// the children key to expire prematurely.
-	committed, _ := isCommitted(ctx, s, parentBid)
-	if !committed {
+	committed, err := isCommitted(ctx, s, parentBid)
+	if err != nil {
+		util.Warnf("batch children: failed to check committed state for parent %s, skipping TTL: %v", parentBid, err)
+	} else if !committed {
 		rds.Expire(ctx, batchChildrenKey(parentBid), BatchTTL)
 	}
 
