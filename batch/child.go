@@ -3,6 +3,7 @@ package batch
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/contribsys/faktory/server"
 	"github.com/contribsys/faktory/util"
@@ -74,77 +75,112 @@ func getChildBatches(ctx context.Context, s *server.Server, parentBid string) ([
 	return children, nil
 }
 
-// allChildrenCallbackFinished checks if all child batches have finished the specified callback type.
-// For "success" callbacks, a child with failed > 0 is treated as "done" because its success
-// callback can never fire. Use anyChildHasFailures separately to decide if the parent's
-// own success callback should fire.
-func allChildrenCallbackFinished(ctx context.Context, s *server.Server, parentBid string, callbackType string) bool {
+// checkChildrenStatus checks all child batches' complete and success callback states
+// plus their failure counters in a single pipeline (3N GETs, 1 round trip).
+//
+// Returns:
+//   - completeAllFinished: true if every child's complete callback is done (or not defined)
+//   - successAllFinished: true if every child's success callback is done (or not defined, or child has failures)
+//   - anyFailures: true if any child has failed > 0
+//   - err: non-nil on Redis errors
+func checkChildrenStatus(ctx context.Context, s *server.Server, parentBid string) (bool, bool, bool, error) {
 	children, err := getChildBatches(ctx, s, parentBid)
 	if err != nil {
 		util.Warnf("batch children: failed to get children for %s: %v", parentBid, err)
-		return false // Return false on error to prevent premature callback firing; will be retried on next job ACK/FAIL
+		return false, false, false, err
 	}
 
 	if len(children) == 0 {
-		return true
+		return true, true, false, nil
 	}
 
 	rds := s.Manager().Redis()
 
-	for _, childBid := range children {
-		// Get child's callback state
-		var stateKey string
-		if callbackType == "complete" {
-			stateKey = batchCompleteStateKey(childBid)
-		} else {
-			stateKey = batchSuccessStateKey(childBid)
-		}
-
-		state, err := rds.Get(ctx, stateKey).Result()
-		if err == redis.Nil {
-			// Child batch cleaned up, treat as finished
-			util.Debugf("batch children: child %s state not found, assuming finished", childBid)
-			continue
-		}
-		if err != nil {
-			util.Warnf("batch children: error reading state for child %s: %v", childBid, err)
-			return false // Conservative: don't fire callbacks on Redis error
-		}
-
-		if state == CallbackFinished {
-			continue
-		}
-
-		// For success callbacks: if child has failed > 0, the success callback
-		// will never fire (it requires failed == 0). Treat as "done" so we
-		// don't block the parent forever.
-		if callbackType == "success" {
-			childStatus, statusErr := getBatchStatus(ctx, s, childBid)
-			if statusErr == nil && childStatus.Failed > 0 {
-				util.Debugf("batch children: child %s has failures, success callback will never fire", childBid)
-				continue
-			}
-		}
-
-		// Check if child has this callback type defined
-		var hasCallback bool
-		if callbackType == "complete" {
-			hasCallback = hasCompleteCallback(ctx, s, childBid)
-		} else {
-			hasCallback = hasSuccessCallback(ctx, s, childBid)
-		}
-
-		if hasCallback && state != CallbackFinished {
-			util.Debugf("batch children: child %s %s callback not finished (state=%s)", childBid, callbackType, state)
-			return false
+	// Pipeline: for each child, GET complete_st + GET success_st + GET failed
+	pipe := rds.TxPipeline()
+	type childCmds struct {
+		bid           string
+		completeStCmd *redis.StringCmd
+		successStCmd  *redis.StringCmd
+		failedCmd     *redis.StringCmd
+	}
+	cmds := make([]childCmds, len(children))
+	for i, childBid := range children {
+		cmds[i] = childCmds{
+			bid:           childBid,
+			completeStCmd: pipe.Get(ctx, batchCompleteStateKey(childBid)),
+			successStCmd:  pipe.Get(ctx, batchSuccessStateKey(childBid)),
+			failedCmd:     pipe.Get(ctx, batchFailedKey(childBid)),
 		}
 	}
 
-	util.Debugf("batch children: all children of %s have finished %s callbacks", parentBid, callbackType)
-	return true
+	_, err = pipe.Exec(ctx)
+	if err != nil && err != redis.Nil {
+		util.Warnf("batch children: pipeline error for %s: %v", parentBid, err)
+		return false, false, false, err
+	}
+
+	completeAllFinished := true
+	successAllFinished := true
+	anyFailures := false
+
+	for _, c := range cmds {
+		// Parse failed counter
+		failed, err := strconv.ParseInt(c.failedCmd.Val(), 10, 64)
+		if err != nil && c.failedCmd.Val() != "" {
+			util.Warnf("batch children: failed to parse failed counter for child %s: %v", c.bid, err)
+			return false, false, anyFailures, err
+		}
+		if failed > 0 {
+			anyFailures = true
+		}
+
+		// Check complete callback state
+		completeSt, completeErr := c.completeStCmd.Result()
+		if completeErr == redis.Nil {
+			// Child batch cleaned up, treat as finished
+			util.Debugf("batch children: child %s complete state not found, assuming finished", c.bid)
+		} else if completeErr != nil {
+			util.Warnf("batch children: error reading complete state for child %s: %v", c.bid, completeErr)
+			return false, false, anyFailures, completeErr
+		} else if completeSt != CallbackFinished {
+			if hasCompleteCallback(ctx, s, c.bid) {
+				util.Debugf("batch children: child %s complete callback not finished (state=%s)", c.bid, completeSt)
+				completeAllFinished = false
+			}
+		}
+
+		// Check success callback state
+		successSt, successErr := c.successStCmd.Result()
+		if successErr == redis.Nil {
+			// Child batch cleaned up, treat as finished
+			util.Debugf("batch children: child %s success state not found, assuming finished", c.bid)
+		} else if successErr != nil {
+			util.Warnf("batch children: error reading success state for child %s: %v", c.bid, successErr)
+			return false, false, anyFailures, successErr
+		} else if successSt == CallbackFinished {
+			// Already finished, nothing to do
+		} else if failed > 0 {
+			// Child has failures — its success callback can never fire.
+			// Treat as "done" so we don't block the parent forever.
+			util.Debugf("batch children: child %s has failures, success callback will never fire", c.bid)
+		} else if hasSuccessCallback(ctx, s, c.bid) {
+			util.Debugf("batch children: child %s success callback not finished (state=%s)", c.bid, successSt)
+			successAllFinished = false
+		}
+	}
+
+	if completeAllFinished {
+		util.Debugf("batch children: all children of %s have finished complete callbacks", parentBid)
+	}
+	if successAllFinished {
+		util.Debugf("batch children: all children of %s have finished success callbacks", parentBid)
+	}
+	return completeAllFinished, successAllFinished, anyFailures, nil
 }
 
-// anyChildHasFailures checks if any child batch has failed > 0
+// anyChildHasFailures checks if any child batch has failed > 0.
+// It pipelines GET failed for all children in a single round trip.
 func anyChildHasFailures(ctx context.Context, s *server.Server, parentBid string) (bool, error) {
 	children, err := getChildBatches(ctx, s, parentBid)
 	if err != nil {
@@ -152,16 +188,31 @@ func anyChildHasFailures(ctx context.Context, s *server.Server, parentBid string
 		return false, err
 	}
 
-	var lastErr error
-	for _, childBid := range children {
-		childStatus, err := getBatchStatus(ctx, s, childBid)
-		if err != nil {
-			lastErr = err
-			continue
+	if len(children) == 0 {
+		return false, nil
+	}
+
+	rds := s.Manager().Redis()
+	pipe := rds.TxPipeline()
+	failedCmds := make([]*redis.StringCmd, len(children))
+	for i, childBid := range children {
+		failedCmds[i] = pipe.Get(ctx, batchFailedKey(childBid))
+	}
+
+	_, err = pipe.Exec(ctx)
+	if err != nil && err != redis.Nil {
+		return false, err
+	}
+
+	for i, cmd := range failedCmds {
+		failed, err := strconv.ParseInt(cmd.Val(), 10, 64)
+		if err != nil && cmd.Val() != "" {
+			util.Warnf("batch children: failed to parse failed counter for child %s: %v", children[i], err)
+			return false, err
 		}
-		if childStatus.Failed > 0 {
+		if failed > 0 {
 			return true, nil
 		}
 	}
-	return false, lastErr
+	return false, nil
 }

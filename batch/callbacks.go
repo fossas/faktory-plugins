@@ -30,30 +30,37 @@ func (b *BatchSubsystem) checkAndFireCallbacks(ctx context.Context, s *server.Se
 		return
 	}
 
+	// We only fire callbacks when
+	//	- there are no pending jobs
+	//	- they have not already been enqueued or completed
+	if status.Pending > 0 && !(status.CompleteState == CallbackPending || status.SuccessState == CallbackPending) {
+		return
+	}
+
+	completeChildrenOk, successChildrenOk, childFailures, err := checkChildrenStatus(ctx, s, bid)
+	if err != nil {
+		util.Warnf("batch callbacks: error checking children status for %s: %v", bid, err)
+		return
+	}
+
 	// Check complete callback
 	// Fires when: pending == 0 AND all children's complete callbacks finished
-	if status.Pending == 0 && status.CompleteState == CallbackPending {
-		childrenOk := allChildrenCallbackFinished(ctx, s, bid, "complete")
-		if childrenOk {
-			b.fireCallback(ctx, s, bid, "complete")
-			// Refresh status after firing complete
-			status, err = getBatchStatus(ctx, s, bid)
-			if err != nil {
-				util.Warnf("batch callbacks: error refreshing status for %s: %v", bid, err)
-				return
-			}
+	if status.CompleteState == CallbackPending && completeChildrenOk {
+		b.fireCallback(ctx, s, bid, "complete")
+		// Refresh status after firing complete
+		status, err = getBatchStatus(ctx, s, bid)
+		if err != nil {
+			util.Warnf("batch callbacks: error refreshing status for %s: %v", bid, err)
+			return
 		}
 	}
 
 	// Check success callback
 	// Fires when: pending == 0 AND failed == 0 AND no child failures AND complete callback enqueued (or not defined) AND all children's success callbacks finished
-	if status.Pending == 0 && status.Failed == 0 && status.SuccessState == CallbackPending {
+	if status.Failed == 0 && status.SuccessState == CallbackPending {
 		// Complete must be enqueued (or not defined)
 		completeOk := status.CompleteState == CallbackEnqueued || status.CompleteState == CallbackFinished || !hasCompleteCallback(ctx, s, bid)
-		childrenOk := allChildrenCallbackFinished(ctx, s, bid, "success")
-		childFailures, childErr := anyChildHasFailures(ctx, s, bid)
-		noChildFailures := childErr == nil && !childFailures
-		if completeOk && childrenOk && noChildFailures {
+		if completeOk && successChildrenOk && !childFailures {
 			b.fireCallback(ctx, s, bid, "success")
 		}
 	}
