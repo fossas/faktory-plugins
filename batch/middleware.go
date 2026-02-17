@@ -108,8 +108,8 @@ func (b *BatchSubsystem) ackMiddleware(ctx context.Context, next func() error) e
 	}
 
 	// Decrement pending counter
-	redis := b.Server.Manager().Redis()
-	pending, err := redis.Decr(ctx, batchPendingKey(bid)).Result()
+	rds := b.Server.Manager().Redis()
+	pending, err := rds.Decr(ctx, batchPendingKey(bid)).Result()
 	if err != nil {
 		util.Warnf("batch ack middleware: failed to decrement pending for batch %s: %v", bid, err)
 	}
@@ -180,8 +180,8 @@ func (b *BatchSubsystem) failMiddleware(ctx context.Context, next func() error) 
 		return nil
 	}
 
-	redis := b.Server.Manager().Redis()
-	pipe := redis.TxPipeline()
+	rds := b.Server.Manager().Redis()
+	pipe := rds.TxPipeline()
 
 	// Decrement pending only on first execution
 	// (complete callback fires when all jobs have executed at least once)

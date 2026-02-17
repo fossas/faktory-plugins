@@ -75,7 +75,7 @@ func generateBid() string {
 
 // createBatch creates a new batch in Redis with the given definition
 func createBatch(ctx context.Context, s *server.Server, batch *client.Batch) error {
-	redis := s.Manager().Redis()
+	rds := s.Manager().Redis()
 
 	// Serialize callback jobs to JSON
 	var successJSON, completeJSON string
@@ -95,7 +95,7 @@ func createBatch(ctx context.Context, s *server.Server, batch *client.Batch) err
 	}
 
 	// Use pipeline for atomic batch creation
-	pipe := redis.Pipeline()
+	pipe := rds.Pipeline()
 
 	// Store batch metadata as hash
 	pipe.HSet(ctx, batchMetaKey(batch.Bid), map[string]interface{}{
@@ -127,8 +127,8 @@ func createBatch(ctx context.Context, s *server.Server, batch *client.Batch) err
 
 // batchExists checks if a batch exists in Redis
 func batchExists(ctx context.Context, s *server.Server, bid string) (bool, error) {
-	redis := s.Manager().Redis()
-	exists, err := redis.Exists(ctx, batchMetaKey(bid)).Result()
+	rds := s.Manager().Redis()
+	exists, err := rds.Exists(ctx, batchMetaKey(bid)).Result()
 	if err != nil {
 		return false, err
 	}
@@ -137,9 +137,9 @@ func batchExists(ctx context.Context, s *server.Server, bid string) (bool, error
 
 // getBatch retrieves a batch definition from Redis
 func getBatch(ctx context.Context, s *server.Server, bid string) (*client.Batch, error) {
-	redis := s.Manager().Redis()
+	rds := s.Manager().Redis()
 
-	data, err := redis.HGetAll(ctx, batchMetaKey(bid)).Result()
+	data, err := rds.HGetAll(ctx, batchMetaKey(bid)).Result()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get batch: %w", err)
 	}
@@ -226,8 +226,8 @@ func getBatchStatus(ctx context.Context, s *server.Server, bid string) (*client.
 
 // isCommitted checks if a batch has been committed
 func isCommitted(ctx context.Context, s *server.Server, bid string) (bool, error) {
-	redis := s.Manager().Redis()
-	committed, err := redis.HGet(ctx, batchMetaKey(bid), "committed").Result()
+	rds := s.Manager().Redis()
+	committed, err := rds.HGet(ctx, batchMetaKey(bid), "committed").Result()
 	if err != nil {
 		return false, err
 	}
@@ -323,7 +323,7 @@ func setUncommitted(ctx context.Context, s *server.Server, bid string) error {
 
 // deleteBatch removes all Redis keys associated with a batch
 func deleteBatch(ctx context.Context, s *server.Server, bid string) error {
-	redis := s.Manager().Redis()
+	rds := s.Manager().Redis()
 
 	keys := []string{
 		batchMetaKey(bid),
@@ -337,12 +337,12 @@ func deleteBatch(ctx context.Context, s *server.Server, bid string) error {
 		batchSuccessStateKey(bid) + ":lock",
 	}
 
-	_, err := redis.Del(ctx, keys...).Result()
+	_, err := rds.Del(ctx, keys...).Result()
 	if err != nil {
 		return fmt.Errorf("failed to delete batch: %w", err)
 	}
 
-	redis.SRem(ctx, batchCommittedSetKey(), bid)
+	rds.SRem(ctx, batchCommittedSetKey(), bid)
 
 	util.Debugf("Deleted batch %s", bid)
 	return nil

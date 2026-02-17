@@ -69,8 +69,8 @@ func TestPushMiddlewareAfterCallbackStarted(t *testing.T) {
 		require.NoError(t, err)
 
 		// Manually set callback state to simulate callback started
-		redis := s.Manager().Redis()
-		redis.Set(ctx, batchSuccessStateKey(bid), CallbackEnqueued, 0)
+		rds := s.Manager().Redis()
+		rds.Set(ctx, batchSuccessStateKey(bid), CallbackEnqueued, 0)
 
 		// Try to push job to batch after callback started
 		job := client.NewJob("TestJob", 1)

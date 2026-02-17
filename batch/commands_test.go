@@ -369,7 +369,7 @@ func TestBatchMissingSubcommand(t *testing.T) {
 func TestBatchTTL(t *testing.T) {
 	withServer(func(s *server.Server, cl *client.Client) {
 		ctx := context.Background()
-		redis := s.Manager().Redis()
+		rds := s.Manager().Redis()
 
 		t.Run("uncommitted batch has TTL on all keys", func(t *testing.T) {
 			// Create batch without committing
@@ -388,7 +388,7 @@ func TestBatchTTL(t *testing.T) {
 			}
 
 			for _, key := range keys {
-				ttl, err := redis.TTL(ctx, key).Result()
+				ttl, err := rds.TTL(ctx, key).Result()
 				require.NoError(t, err, "failed to get TTL for %s", key)
 				assert.Greater(t, ttl.Seconds(), float64(0), "key %s should have positive TTL", key)
 				assert.LessOrEqual(t, ttl.Seconds(), BatchTTL.Seconds(), "key %s TTL should be <= BatchTTL", key)
@@ -422,7 +422,7 @@ func TestBatchTTL(t *testing.T) {
 			}
 
 			for _, key := range keys {
-				ttl, err := redis.TTL(ctx, key).Result()
+				ttl, err := rds.TTL(ctx, key).Result()
 				require.NoError(t, err, "failed to get TTL for %s", key)
 				// TTL returns -1 nanosecond for keys with no expiration in go-redis
 				assert.Equal(t, -1*time.Nanosecond, ttl, "key %s should have no TTL after commit", key)
@@ -441,7 +441,7 @@ func TestBatchTTL(t *testing.T) {
 			_ = string(result) // childBid
 
 			// Check children key has TTL
-			ttl, err := redis.TTL(ctx, batchChildrenKey(parentBid)).Result()
+			ttl, err := rds.TTL(ctx, batchChildrenKey(parentBid)).Result()
 			require.NoError(t, err)
 			assert.Greater(t, ttl.Seconds(), float64(0), "children key should have positive TTL")
 
@@ -456,7 +456,7 @@ func TestBatchTTL(t *testing.T) {
 			require.NoError(t, err)
 
 			// Check children key has no TTL after commit
-			ttl, err = redis.TTL(ctx, batchChildrenKey(parentBid)).Result()
+			ttl, err = rds.TTL(ctx, batchChildrenKey(parentBid)).Result()
 			require.NoError(t, err)
 			assert.Equal(t, -1*time.Nanosecond, ttl, "children key should have no TTL after commit")
 		})
