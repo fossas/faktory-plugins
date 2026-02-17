@@ -130,6 +130,8 @@ func (b *BatchSubsystem) batchCommit(c *server.Connection, s *server.Server, bid
 
 // batchOpen handles BATCH OPEN <bid>
 // Reopens a committed batch to allow adding more jobs
+// Note: We do not check if the client calling `BATCH OPEN` is working on a job in the batch. The architecture of the
+// workers in our Core application does not allow us to do this.
 func (b *BatchSubsystem) batchOpen(c *server.Connection, s *server.Server, bid string) {
 	bid = strings.TrimSpace(bid)
 	if bid == "" {
@@ -150,19 +152,11 @@ func (b *BatchSubsystem) batchOpen(c *server.Connection, s *server.Server, bid s
 		return
 	}
 
-	// Check callbacks haven't started
-	status, err := getBatchStatus(ctx, s, bid)
-	if err != nil {
+	// Atomically check callbacks haven't started and uncommit
+	if err := setUncommitted(ctx, s, bid); err != nil {
 		_ = c.Error("BATCH OPEN", err)
 		return
 	}
-	if status.CompleteState != CallbackPending || status.SuccessState != CallbackPending {
-		_ = c.Error("BATCH OPEN", fmt.Errorf("cannot reopen batch after callbacks have started"))
-		return
-	}
-
-	// Note: Authorization check is intentionally skipped for now
-	// due to coordinator/executor architecture requirements
 
 	util.Debugf("Opened batch %s", bid)
 

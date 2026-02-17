@@ -272,6 +272,55 @@ func setCommitted(ctx context.Context, s *server.Server, bid string) error {
 	return nil
 }
 
+// setUncommittedLua atomically checks that callbacks have not started,
+// clears the committed flag, removes the batch from the committed set,
+// and restores TTL on all batch keys. Returns 1 on success, 0 if
+// callbacks have already started.
+// KEYS[1] = batch meta, KEYS[2] = total, KEYS[3] = pending,
+// KEYS[4] = failed, KEYS[5] = complete_st, KEYS[6] = success_st,
+// KEYS[7] = children, KEYS[8] = committed set
+// ARGV[1] = bid, ARGV[2] = TTL in seconds
+var setUncommittedLua = redis.NewScript(`
+	local complete_st = redis.call("GET", KEYS[5])
+	local success_st = redis.call("GET", KEYS[6])
+	if (complete_st ~= false and complete_st ~= "") or (success_st ~= false and success_st ~= "") then
+		return 0
+	end
+	redis.call("HSET", KEYS[1], "committed", "0")
+	redis.call("SREM", KEYS[8], ARGV[1])
+	for i = 1, 7 do
+		redis.call("EXPIRE", KEYS[i], ARGV[2])
+	end
+	return 1
+`)
+
+// setUncommitted atomically checks callbacks are pending, clears the committed
+// flag, removes the batch from the committed set, and restores TTL on all keys.
+func setUncommitted(ctx context.Context, s *server.Server, bid string) error {
+	rds := s.Manager().Redis()
+	result, err := setUncommittedLua.Run(ctx, rds,
+		[]string{
+			batchMetaKey(bid),          // KEYS[1]
+			batchTotalKey(bid),         // KEYS[2]
+			batchPendingKey(bid),       // KEYS[3]
+			batchFailedKey(bid),        // KEYS[4]
+			batchCompleteStateKey(bid), // KEYS[5]
+			batchSuccessStateKey(bid),  // KEYS[6]
+			batchChildrenKey(bid),      // KEYS[7]
+			batchCommittedSetKey(),     // KEYS[8]
+		},
+		bid,
+		int(BatchTTL.Seconds()),
+	).Int()
+	if err != nil {
+		return fmt.Errorf("failed to uncommit batch: %w", err)
+	}
+	if result == 0 {
+		return fmt.Errorf("cannot reopen batch after callbacks have started")
+	}
+	return nil
+}
+
 // deleteBatch removes all Redis keys associated with a batch
 func deleteBatch(ctx context.Context, s *server.Server, bid string) error {
 	redis := s.Manager().Redis()
