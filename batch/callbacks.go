@@ -13,15 +13,15 @@ import (
 
 // checkAndFireCallbacks evaluates whether callbacks should fire for a batch
 // and enqueues them if conditions are met
-func (b *BatchSubsystem) checkAndFireCallbacks(ctx context.Context, s *server.Server, bid string) {
-	status, err := getBatchStatus(ctx, s, bid)
+func (b *BatchSubsystem) checkAndFireCallbacks(ctx context.Context, bid string) {
+	status, err := getBatchStatus(ctx, b.Server, bid)
 	if err != nil {
 		util.Warnf("batch callbacks: error getting status for %s: %v", bid, err)
 		return
 	}
 
 	// Batch must be committed
-	committed, err := isCommitted(ctx, s, bid)
+	committed, err := isCommitted(ctx, b.Server, bid)
 	if err != nil {
 		util.Warnf("batch callbacks: error checking committed state for %s: %v", bid, err)
 		return
@@ -37,7 +37,7 @@ func (b *BatchSubsystem) checkAndFireCallbacks(ctx context.Context, s *server.Se
 		return
 	}
 
-	completeChildrenOk, successChildrenOk, childFailures, err := checkChildrenStatus(ctx, s, bid)
+	completeChildrenOk, successChildrenOk, childFailures, err := checkChildrenStatus(ctx, b.Server, bid)
 	if err != nil {
 		util.Warnf("batch callbacks: error checking children status for %s: %v", bid, err)
 		return
@@ -46,9 +46,9 @@ func (b *BatchSubsystem) checkAndFireCallbacks(ctx context.Context, s *server.Se
 	// Check complete callback
 	// Fires when: pending == 0 AND all children's complete callbacks finished
 	if status.CompleteState == CallbackPending && completeChildrenOk {
-		b.fireCallback(ctx, s, bid, "complete")
+		b.fireCallback(ctx, bid, "complete")
 		// Refresh status after firing complete
-		status, err = getBatchStatus(ctx, s, bid)
+		status, err = getBatchStatus(ctx, b.Server, bid)
 		if err != nil {
 			util.Warnf("batch callbacks: error refreshing status for %s: %v", bid, err)
 			return
@@ -59,16 +59,16 @@ func (b *BatchSubsystem) checkAndFireCallbacks(ctx context.Context, s *server.Se
 	// Fires when: pending == 0 AND failed == 0 AND no child failures AND complete callback enqueued (or not defined) AND all children's success callbacks finished
 	if status.Failed == 0 && status.SuccessState == CallbackPending {
 		// Complete must be enqueued (or not defined)
-		completeOk := status.CompleteState == CallbackEnqueued || status.CompleteState == CallbackFinished || !hasCompleteCallback(ctx, s, bid)
+		completeOk := status.CompleteState == CallbackEnqueued || status.CompleteState == CallbackFinished || !hasCompleteCallback(ctx, b.Server, bid)
 		if completeOk && successChildrenOk && !childFailures {
-			b.fireCallback(ctx, s, bid, "success")
+			b.fireCallback(ctx, bid, "success")
 		}
 	}
 }
 
 // fireCallback enqueues a callback job for the given batch
-func (b *BatchSubsystem) fireCallback(ctx context.Context, s *server.Server, bid string, callbackType string) {
-	rds := s.Manager().Redis()
+func (b *BatchSubsystem) fireCallback(ctx context.Context, bid string, callbackType string) {
+	rds := b.Server.Manager().Redis()
 
 	// Determine which state key to use
 	var stateKey string
@@ -108,7 +108,7 @@ func (b *BatchSubsystem) fireCallback(ctx context.Context, s *server.Server, bid
 	}
 
 	// Get the callback job definition
-	batch, err := getBatch(ctx, s, bid)
+	batch, err := getBatch(ctx, b.Server, bid)
 	if err != nil {
 		util.Warnf("batch callbacks: failed to get batch %s for %s callback: %v", bid, callbackType, err)
 		// Reset state and release lock to allow retry
@@ -128,7 +128,7 @@ func (b *BatchSubsystem) fireCallback(ctx context.Context, s *server.Server, bid
 		util.Debugf("batch %s has no %s callback defined, marking as finished", bid, callbackType)
 		rds.Set(ctx, stateKey, CallbackFinished, 0)
 		// Check if this triggers the next callback or cleanup
-		b.checkPostCallback(ctx, s, bid, callbackType)
+		b.checkPostCallback(ctx, bid, callbackType)
 		return
 	}
 
@@ -168,7 +168,7 @@ func (b *BatchSubsystem) fireCallback(ctx context.Context, s *server.Server, bid
 	// This ordering prevents a stuck state if the process crashes: if we set state
 	// to Enqueued first and crash before Push, the callback would never be delivered.
 	// The lock prevents double-push during the window where state is still Pending.
-	err = s.Manager().Push(ctx, job)
+	err = b.Server.Manager().Push(ctx, job)
 	if err != nil {
 		util.Warnf("batch callbacks: failed to enqueue %s callback for batch %s: %v", callbackType, bid, err)
 		// Release lock to allow retry
@@ -205,7 +205,7 @@ func (b *BatchSubsystem) handleCallbackComplete(ctx context.Context, bid string,
 
 	util.Debugf("batch %s %s callback completed", bid, callbackType)
 
-	b.checkPostCallback(ctx, b.Server, bid, callbackType)
+	b.checkPostCallback(ctx, bid, callbackType)
 }
 
 // handleCallbackFailure is called when a callback job terminally fails.
@@ -240,13 +240,13 @@ func (b *BatchSubsystem) handleCallbackFailure(ctx context.Context, job *client.
 		return
 	}
 
-	b.checkPostCallback(ctx, b.Server, bid, callbackType)
+	b.checkPostCallback(ctx, bid, callbackType)
 }
 
 // checkPostCallback handles actions after a callback completes
-func (b *BatchSubsystem) checkPostCallback(ctx context.Context, s *server.Server, bid string, callbackType string) {
+func (b *BatchSubsystem) checkPostCallback(ctx context.Context, bid string, callbackType string) {
 	// Re-check parent's callbacks (this might unblock them)
-	batch, err := getBatch(ctx, s, bid)
+	batch, err := getBatch(ctx, b.Server, bid)
 	if err != nil {
 		util.Warnf("batch callbacks: error getting batch %s: %v", bid, err)
 		return
@@ -254,36 +254,36 @@ func (b *BatchSubsystem) checkPostCallback(ctx context.Context, s *server.Server
 
 	if batch.ParentBid != "" {
 		util.Debugf("batch %s has parent %s, checking parent callbacks", bid, batch.ParentBid)
-		go b.checkAndFireCallbacks(context.Background(), s, batch.ParentBid)
+		go b.checkAndFireCallbacks(context.Background(), batch.ParentBid)
 	}
 
 	// If complete callback just finished, check if success callback can fire
 	if callbackType == "complete" {
-		go b.checkAndFireCallbacks(context.Background(), s, bid)
+		go b.checkAndFireCallbacks(context.Background(), bid)
 	}
 
 	// Check if batch is fully complete for cleanup
-	b.checkBatchCleanup(ctx, s, bid)
+	b.checkBatchCleanup(ctx, bid)
 }
 
 // checkBatchCleanup checks if a batch is fully complete and can be cleaned up
-func (b *BatchSubsystem) checkBatchCleanup(ctx context.Context, s *server.Server, bid string) {
-	status, err := getBatchStatus(ctx, s, bid)
+func (b *BatchSubsystem) checkBatchCleanup(ctx context.Context, bid string) {
+	status, err := getBatchStatus(ctx, b.Server, bid)
 	if err != nil {
 		return
 	}
 
 	// Check if all callbacks are finished
-	completeFinished := status.CompleteState == CallbackFinished || !hasCompleteCallback(ctx, s, bid)
+	completeFinished := status.CompleteState == CallbackFinished || !hasCompleteCallback(ctx, b.Server, bid)
 
 	// Success is "finished" if:
 	// 1. SuccessState == CallbackFinished (it ran), OR
 	// 2. No success callback defined, OR
 	// 3. failed > 0 (success can never fire because it requires failed == 0), OR
 	// 4. Any child batch has failures (parent success can never fire)
-	childFailures, childErr := anyChildHasFailures(ctx, s, bid)
+	childFailures, childErr := anyChildHasFailures(ctx, b.Server, bid)
 	successFinished := status.SuccessState == CallbackFinished ||
-		!hasSuccessCallback(ctx, s, bid) ||
+		!hasSuccessCallback(ctx, b.Server, bid) ||
 		status.Failed > 0 ||
 		(childErr == nil && childFailures)
 
@@ -291,13 +291,13 @@ func (b *BatchSubsystem) checkBatchCleanup(ctx context.Context, s *server.Server
 		// If this batch has a parent, don't delete yet — the parent needs to be able
 		// to observe this child's callback state. Instead, only delete when the parent
 		// is also being cleaned up (the parent's cleanup will delete children).
-		batch, err := getBatch(ctx, s, bid)
+		batch, err := getBatch(ctx, b.Server, bid)
 		if err != nil {
 			util.Warnf("batch cleanup: failed to get batch %s: %v", bid, err)
 			return
 		}
 		if batch.ParentBid != "" {
-			parentExists, err := batchExists(ctx, s, batch.ParentBid)
+			parentExists, err := batchExists(ctx, b.Server, batch.ParentBid)
 			if err != nil {
 				util.Warnf("batch cleanup: failed to check parent %s: %v", batch.ParentBid, err)
 				return
@@ -310,22 +310,22 @@ func (b *BatchSubsystem) checkBatchCleanup(ctx context.Context, s *server.Server
 
 		util.Debugf("batch %s is fully complete, scheduling cleanup", bid)
 		// Delete batch data and all child batches
-		b.deleteBatchTree(ctx, s, bid)
+		b.deleteBatchTree(ctx, bid)
 	}
 }
 
 // deleteBatchTree deletes a batch and all of its child batches recursively
-func (b *BatchSubsystem) deleteBatchTree(ctx context.Context, s *server.Server, bid string) {
+func (b *BatchSubsystem) deleteBatchTree(ctx context.Context, bid string) {
 	// Delete children first
-	children, err := getChildBatches(ctx, s, bid)
+	children, err := getChildBatches(ctx, b.Server, bid)
 	if err == nil {
 		for _, childBid := range children {
-			b.deleteBatchTree(ctx, s, childBid)
+			b.deleteBatchTree(ctx, childBid)
 		}
 	}
 
 	// Delete this batch
-	err = deleteBatch(ctx, s, bid)
+	err = deleteBatch(ctx, b.Server, bid)
 	if err != nil {
 		util.Warnf("batch cleanup: failed to delete batch %s: %v", bid, err)
 	}

@@ -118,7 +118,7 @@ func (b *BatchSubsystem) ackMiddleware(ctx context.Context, next func() error) e
 
 	// Check if callbacks should fire
 	if pending <= 0 {
-		go b.checkAndFireCallbacks(context.Background(), b.Server, bid)
+		go b.checkAndFireCallbacks(context.Background(), bid)
 	}
 
 	return nil
@@ -202,7 +202,7 @@ func (b *BatchSubsystem) failMiddleware(ctx context.Context, next func() error) 
 	}
 
 	// Check if callbacks should fire
-	go b.checkAndFireCallbacks(context.Background(), b.Server, bid)
+	go b.checkAndFireCallbacks(context.Background(), bid)
 
 	return nil
 }

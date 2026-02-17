@@ -38,6 +38,7 @@ func (b *BatchSubsystem) Name() string {
 
 // Reload reloads the subsystem configuration
 func (b *BatchSubsystem) Reload(s *server.Server) error {
+	b.Server = s
 	return nil
 }
 

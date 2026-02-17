@@ -3,8 +3,11 @@ package batch
 import (
 	"context"
 
+	"github.com/contribsys/faktory/server"
 	"github.com/contribsys/faktory/util"
 )
+
+var _ server.Taskable = &batchSweepTask{}
 
 // batchSweepTask is a background task that periodically re-checks committed
 // batches and fires any callbacks that should have fired but didn't (e.g. due
@@ -31,7 +34,7 @@ func (t *batchSweepTask) Execute(ctx context.Context) error {
 	for iter.Next(ctx) {
 		bid := iter.Val()
 		t.batchesChecked++
-		t.subsystem.checkAndFireCallbacks(ctx, s, bid)
+		t.subsystem.checkAndFireCallbacks(ctx, bid)
 	}
 	if err := iter.Err(); err != nil {
 		util.Warnf("Batch sweep: failed to scan committed set: %v", err)

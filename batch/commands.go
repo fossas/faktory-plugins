@@ -28,13 +28,13 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 
 	switch subcommand {
 	case "NEW":
-		b.batchNew(c, s, args)
+		b.batchNew(c, args)
 	case "COMMIT":
-		b.batchCommit(c, s, args)
+		b.batchCommit(c, args)
 	case "OPEN":
-		b.batchOpen(c, s, args)
+		b.batchOpen(c, args)
 	case "STATUS":
-		b.batchStatus(c, s, args)
+		b.batchStatus(c, args)
 	default:
 		_ = c.Error(cmd, fmt.Errorf("unknown BATCH subcommand: %s", subcommand))
 	}
@@ -42,7 +42,7 @@ func (b *BatchSubsystem) batchCommand(c *server.Connection, s *server.Server, cm
 
 // batchNew handles BATCH NEW {json}
 // Creates a new batch and returns the generated BID
-func (b *BatchSubsystem) batchNew(c *server.Connection, s *server.Server, data string) {
+func (b *BatchSubsystem) batchNew(c *server.Connection, data string) {
 	if data == "" {
 		_ = c.Error("BATCH NEW", fmt.Errorf("missing batch definition"))
 		return
@@ -71,16 +71,16 @@ func (b *BatchSubsystem) batchNew(c *server.Connection, s *server.Server, data s
 
 	// Create batch in Redis
 	ctx := c.Context
-	if err := createBatch(ctx, s, &batch); err != nil {
+	if err := createBatch(ctx, b.Server, &batch); err != nil {
 		_ = c.Error("BATCH NEW", err)
 		return
 	}
 
 	// If parent_bid specified, add as child of parent
 	if batch.ParentBid != "" {
-		if err := addChildBatch(ctx, s, batch.ParentBid, batch.Bid); err != nil {
+		if err := addChildBatch(ctx, b.Server, batch.ParentBid, batch.Bid); err != nil {
 			// Clean up the created batch on failure
-			_ = deleteBatch(ctx, s, batch.Bid)
+			_ = deleteBatch(ctx, b.Server, batch.Bid)
 			_ = c.Error("BATCH NEW", fmt.Errorf("failed to add child batch: %w", err))
 			return
 		}
@@ -94,7 +94,7 @@ func (b *BatchSubsystem) batchNew(c *server.Connection, s *server.Server, data s
 
 // batchCommit handles BATCH COMMIT <bid>
 // Marks the batch as committed, enabling callbacks to fire
-func (b *BatchSubsystem) batchCommit(c *server.Connection, s *server.Server, bid string) {
+func (b *BatchSubsystem) batchCommit(c *server.Connection, bid string) {
 	bid = strings.TrimSpace(bid)
 	if bid == "" {
 		_ = c.Error("BATCH COMMIT", fmt.Errorf("missing batch ID"))
@@ -104,7 +104,7 @@ func (b *BatchSubsystem) batchCommit(c *server.Connection, s *server.Server, bid
 	ctx := c.Context
 
 	// Check batch exists
-	exists, err := batchExists(ctx, s, bid)
+	exists, err := batchExists(ctx, b.Server, bid)
 	if err != nil {
 		_ = c.Error("BATCH COMMIT", err)
 		return
@@ -115,7 +115,7 @@ func (b *BatchSubsystem) batchCommit(c *server.Connection, s *server.Server, bid
 	}
 
 	// Mark as committed
-	if err := setCommitted(ctx, s, bid); err != nil {
+	if err := setCommitted(ctx, b.Server, bid); err != nil {
 		_ = c.Error("BATCH COMMIT", err)
 		return
 	}
@@ -123,7 +123,7 @@ func (b *BatchSubsystem) batchCommit(c *server.Connection, s *server.Server, bid
 	util.Debugf("Committed batch %s", bid)
 
 	// Check if callbacks should fire (e.g., empty batch)
-	go b.checkAndFireCallbacks(context.Background(), s, bid)
+	go b.checkAndFireCallbacks(context.Background(), bid)
 
 	_ = c.Ok()
 }
@@ -132,7 +132,7 @@ func (b *BatchSubsystem) batchCommit(c *server.Connection, s *server.Server, bid
 // Reopens a committed batch to allow adding more jobs
 // Note: We do not check if the client calling `BATCH OPEN` is working on a job in the batch. The architecture of the
 // workers in our Core application does not allow us to do this.
-func (b *BatchSubsystem) batchOpen(c *server.Connection, s *server.Server, bid string) {
+func (b *BatchSubsystem) batchOpen(c *server.Connection, bid string) {
 	bid = strings.TrimSpace(bid)
 	if bid == "" {
 		_ = c.Error("BATCH OPEN", fmt.Errorf("missing batch ID"))
@@ -142,7 +142,7 @@ func (b *BatchSubsystem) batchOpen(c *server.Connection, s *server.Server, bid s
 	ctx := c.Context
 
 	// Check batch exists
-	exists, err := batchExists(ctx, s, bid)
+	exists, err := batchExists(ctx, b.Server, bid)
 	if err != nil {
 		_ = c.Error("BATCH OPEN", err)
 		return
@@ -153,7 +153,7 @@ func (b *BatchSubsystem) batchOpen(c *server.Connection, s *server.Server, bid s
 	}
 
 	// Atomically check callbacks haven't started and uncommit
-	if err := setUncommitted(ctx, s, bid); err != nil {
+	if err := setUncommitted(ctx, b.Server, bid); err != nil {
 		_ = c.Error("BATCH OPEN", err)
 		return
 	}
@@ -166,7 +166,7 @@ func (b *BatchSubsystem) batchOpen(c *server.Connection, s *server.Server, bid s
 
 // batchStatus handles BATCH STATUS <bid>
 // Returns the current status of a batch as JSON
-func (b *BatchSubsystem) batchStatus(c *server.Connection, s *server.Server, bid string) {
+func (b *BatchSubsystem) batchStatus(c *server.Connection, bid string) {
 	bid = strings.TrimSpace(bid)
 	if bid == "" {
 		_ = c.Error("BATCH STATUS", fmt.Errorf("missing batch ID"))
@@ -175,7 +175,7 @@ func (b *BatchSubsystem) batchStatus(c *server.Connection, s *server.Server, bid
 
 	ctx := c.Context
 
-	status, err := getBatchStatus(ctx, s, bid)
+	status, err := getBatchStatus(ctx, b.Server, bid)
 	if err != nil {
 		_ = c.Error("BATCH STATUS", err)
 		return
