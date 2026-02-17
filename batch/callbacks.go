@@ -95,7 +95,8 @@ func (b *BatchSubsystem) fireCallback(ctx context.Context, s *server.Server, bid
 		return
 	}
 	if currentState != CallbackPending {
-		// Already processed
+		// Already processed, release lock
+		rds.Del(ctx, lockKey)
 		return
 	}
 
