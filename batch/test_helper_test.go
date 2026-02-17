@@ -24,7 +24,9 @@ func withServerConfig(batchEnabled bool, runner func(s *server.Server, cl *clien
 	defer os.RemoveAll(dir)
 
 	configDir := fmt.Sprintf("/tmp/batch_test_config_%d", rand.Int())
-	os.MkdirAll(configDir+"/conf.d", 0755)
+	if err := os.MkdirAll(configDir+"/conf.d", 0755); err != nil {
+		panic(err)
+	}
 	defer os.RemoveAll(configDir)
 
 	// Write batch config
