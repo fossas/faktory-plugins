@@ -179,7 +179,7 @@ func (b *BatchSubsystem) failMiddleware(ctx context.Context, next func() error) 
 	}
 
 	redis := b.Server.Manager().Redis()
-	pipe := redis.Pipeline()
+	pipe := redis.TxPipeline()
 
 	// Decrement pending only on first execution
 	// (complete callback fires when all jobs have executed at least once)
