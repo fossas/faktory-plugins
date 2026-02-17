@@ -126,7 +126,12 @@ func (b *BatchSubsystem) fireCallback(ctx context.Context, bid string, callbackT
 	if callbackJob == nil {
 		// No callback defined, mark as finished
 		util.Debugf("batch %s has no %s callback defined, marking as finished", bid, callbackType)
-		rds.Set(ctx, stateKey, CallbackFinished, 0)
+		if err := rds.Set(ctx, stateKey, CallbackFinished, 0).Err(); err != nil {
+			util.Warnf("batch callbacks: failed to mark %s callback as finished for batch %s: %v", callbackType, bid, err)
+			rds.Del(ctx, lockKey)
+			return
+		}
+		rds.Del(ctx, lockKey)
 		// Check if this triggers the next callback or cleanup
 		b.checkPostCallback(ctx, bid, callbackType)
 		return
