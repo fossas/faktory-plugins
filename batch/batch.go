@@ -174,10 +174,10 @@ func getBatch(ctx context.Context, s *server.Server, bid string) (*client.Batch,
 
 // getBatchStatus retrieves the current status of a batch
 func getBatchStatus(ctx context.Context, s *server.Server, bid string) (*client.BatchStatus, error) {
-	redis := s.Manager().Redis()
+	rds := s.Manager().Redis()
 
 	// Get metadata
-	data, err := redis.HGetAll(ctx, batchMetaKey(bid)).Result()
+	data, err := rds.HGetAll(ctx, batchMetaKey(bid)).Result()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get batch metadata: %w", err)
 	}
@@ -186,7 +186,7 @@ func getBatchStatus(ctx context.Context, s *server.Server, bid string) (*client.
 	}
 
 	// Get counters and states
-	pipe := redis.Pipeline()
+	pipe := rds.TxPipeline()
 	totalCmd := pipe.Get(ctx, batchTotalKey(bid))
 	pendingCmd := pipe.Get(ctx, batchPendingKey(bid))
 	failedCmd := pipe.Get(ctx, batchFailedKey(bid))
@@ -194,13 +194,22 @@ func getBatchStatus(ctx context.Context, s *server.Server, bid string) (*client.
 	successStCmd := pipe.Get(ctx, batchSuccessStateKey(bid))
 
 	_, err = pipe.Exec(ctx)
-	if err != nil {
+	if err != nil && err != redis.Nil {
 		return nil, fmt.Errorf("failed to get batch counters: %w", err)
 	}
 
-	total, _ := strconv.ParseInt(totalCmd.Val(), 10, 64)
-	pending, _ := strconv.ParseInt(pendingCmd.Val(), 10, 64)
-	failed, _ := strconv.ParseInt(failedCmd.Val(), 10, 64)
+	total, err := strconv.ParseInt(totalCmd.Val(), 10, 64)
+	if err != nil && totalCmd.Val() != "" {
+		return nil, fmt.Errorf("failed to parse total counter for batch %s: %w", bid, err)
+	}
+	pending, err := strconv.ParseInt(pendingCmd.Val(), 10, 64)
+	if err != nil && pendingCmd.Val() != "" {
+		return nil, fmt.Errorf("failed to parse pending counter for batch %s: %w", bid, err)
+	}
+	failed, err := strconv.ParseInt(failedCmd.Val(), 10, 64)
+	if err != nil && failedCmd.Val() != "" {
+		return nil, fmt.Errorf("failed to parse failed counter for batch %s: %w", bid, err)
+	}
 
 	return &client.BatchStatus{
 		Bid:           bid,
