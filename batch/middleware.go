@@ -109,7 +109,7 @@ func (b *BatchSubsystem) ackMiddleware(ctx context.Context, next func() error) e
 
 	// Decrement pending counter
 	redis := b.Server.Manager().Redis()
-	_, err = redis.Decr(ctx, batchPendingKey(bid)).Result()
+	pending, err := redis.Decr(ctx, batchPendingKey(bid)).Result()
 	if err != nil {
 		util.Warnf("batch ack middleware: failed to decrement pending for batch %s: %v", bid, err)
 	}
@@ -117,7 +117,9 @@ func (b *BatchSubsystem) ackMiddleware(ctx context.Context, next func() error) e
 	util.Debugf("Job %s in batch %s completed (ACK)", job.Jid, bid)
 
 	// Check if callbacks should fire
-	go b.checkAndFireCallbacks(context.Background(), b.Server, bid)
+	if pending <= 0 {
+		go b.checkAndFireCallbacks(context.Background(), b.Server, bid)
+	}
 
 	return nil
 }
