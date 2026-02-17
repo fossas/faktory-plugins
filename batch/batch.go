@@ -324,6 +324,7 @@ func setUncommitted(ctx context.Context, s *server.Server, bid string) error {
 // deleteBatch removes all Redis keys associated with a batch
 func deleteBatch(ctx context.Context, s *server.Server, bid string) error {
 	rds := s.Manager().Redis()
+	pipe := rds.TxPipeline()
 
 	keys := []string{
 		batchMetaKey(bid),
@@ -336,13 +337,13 @@ func deleteBatch(ctx context.Context, s *server.Server, bid string) error {
 		batchCompleteStateKey(bid) + ":lock",
 		batchSuccessStateKey(bid) + ":lock",
 	}
+	pipe.Del(ctx, keys...)
+	pipe.SRem(ctx, batchCommittedSetKey(), bid)
 
-	_, err := rds.Del(ctx, keys...).Result()
+	_, err := pipe.Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to delete batch: %w", err)
 	}
-
-	rds.SRem(ctx, batchCommittedSetKey(), bid)
 
 	util.Debugf("Deleted batch %s", bid)
 	return nil
