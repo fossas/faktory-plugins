@@ -25,24 +25,23 @@ func (t *batchSweepTask) Execute(ctx context.Context) error {
 	t.sweeps++
 
 	s := t.subsystem.Server
-	redis := s.Manager().Redis()
+	rds := s.Manager().Redis()
 
-	bids, err := redis.SMembers(ctx, batchCommittedSetKey()).Result()
-	if err != nil {
-		util.Warnf("Batch sweep: failed to read committed set: %v", err)
-		return nil
-	}
-
-	for _, bid := range bids {
+	iter := rds.SScan(ctx, batchCommittedSetKey(), 0, "", 100).Iterator()
+	for iter.Next(ctx) {
+		bid := iter.Val()
 		t.batchesChecked++
 		t.subsystem.checkAndFireCallbacks(ctx, s, bid)
+	}
+	if err := iter.Err(); err != nil {
+		util.Warnf("Batch sweep: failed to scan committed set: %v", err)
 	}
 
 	return nil
 }
 
 // Stats returns statistics about the task
-func (t *batchSweepTask) Stats(ctx context.Context) map[string]interface{} {
+func (t *batchSweepTask) Stats(ctx context.Context) map[string]any {
 	return map[string]interface{}{
 		"sweeps":          t.sweeps,
 		"batches_checked": t.batchesChecked,
