@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/server"
@@ -103,9 +102,6 @@ func TestAckMiddleware(t *testing.T) {
 			err = cl.Ack(fetchedJob.Jid)
 			require.NoError(t, err)
 
-			// Wait a moment for middleware to process
-			time.Sleep(100 * time.Millisecond)
-
 			// Check counters
 			statusResult, err := cl.Generic("BATCH STATUS " + bid)
 			require.NoError(t, err)
@@ -164,9 +160,6 @@ func TestDirectToMorgueFailure(t *testing.T) {
 
 			err = cl.Fail(fetchedJob.Jid, fmt.Errorf("direct to morgue"), nil)
 			require.NoError(t, err)
-
-			// Wait for middleware to process
-			time.Sleep(200 * time.Millisecond)
 
 			// Check counters: failed should be 1 (terminal failure)
 			statusResult, err := cl.Generic("BATCH STATUS " + bid)
@@ -231,9 +224,6 @@ func TestCallbackJobTerminalFailure(t *testing.T) {
 			err = cl.Fail(completeCallback.Jid, fmt.Errorf("callback failed"), nil)
 			require.NoError(t, err)
 
-			// Wait for processing
-			time.Sleep(200 * time.Millisecond)
-
 			// The complete callback state should be CallbackFinished despite failure
 			rds := s.Manager().Redis()
 			state, err := rds.Get(ctx, batchCompleteStateKey(bid)).Result()
@@ -273,9 +263,6 @@ func TestFailMiddleware(t *testing.T) {
 			err = cl.Fail(fetchedJob.Jid, fmt.Errorf("test failure"), nil)
 			require.NoError(t, err)
 
-			// Wait a moment for middleware to process
-			time.Sleep(100 * time.Millisecond)
-
 			// Check counters
 			statusResult, err := cl.Generic("BATCH STATUS " + bid)
 			require.NoError(t, err)
@@ -310,9 +297,6 @@ func TestFailMiddleware(t *testing.T) {
 
 			err = cl.Fail(fetchedJob.Jid, fmt.Errorf("test failure"), nil)
 			require.NoError(t, err)
-
-			// Wait a moment for middleware to process
-			time.Sleep(100 * time.Millisecond)
 
 			// Check counters:
 			// - pending should be 0 because job has executed at least once

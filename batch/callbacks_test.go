@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/server"
@@ -370,9 +369,6 @@ func TestNoDoubleCallback(t *testing.T) {
 			require.NoError(t, err)
 			err = cl.Ack(fetchedJob2.Jid)
 			require.NoError(t, err)
-
-			// Wait for callback to be enqueued
-			time.Sleep(300 * time.Millisecond)
 
 			// Should only have one callback
 			callbackJob1, err := cl.Fetch("callbacks")

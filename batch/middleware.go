@@ -89,9 +89,14 @@ func (b *BatchSubsystem) ackMiddleware(ctx context.Context, next func() error) e
 	// Handle callback job completion
 	if cbType, ok := job.GetCustom("_cb"); ok {
 		if bidValue, ok := job.GetCustom("_bid"); ok {
-			bid, _ := bidValue.(string)
-			cbTypeStr, _ := cbType.(string)
-			b.handleCallbackComplete(ctx, bid, cbTypeStr)
+			bid, bidOk := bidValue.(string)
+			cbTypeStr, cbOk := cbType.(string)
+
+			if bidOk && cbOk && bid != "" && cbTypeStr != "" {
+				b.handleCallbackComplete(ctx, bid, cbTypeStr)
+			} else {
+				util.Warnf("batch ack middleware: invalid _bid or _cb type for job %s", job.Jid)
+			}
 		}
 		return nil
 	}
@@ -138,9 +143,14 @@ func (b *BatchSubsystem) failMiddleware(ctx context.Context, next func() error) 
 	// Handle callback job failure
 	if cbType, ok := job.GetCustom("_cb"); ok {
 		if bidValue, ok := job.GetCustom("_bid"); ok {
-			bid, _ := bidValue.(string)
-			cbTypeStr, _ := cbType.(string)
-			b.handleCallbackFailure(ctx, job, bid, cbTypeStr)
+			bid, bidOk := bidValue.(string)
+			cbTypeStr, cbOk := cbType.(string)
+
+			if bidOk && cbOk && bid != "" && cbTypeStr != "" {
+				b.handleCallbackFailure(ctx, job, bid, cbTypeStr)
+			} else {
+				util.Warnf("batch fail middleware: invalid _bid or _cb type for job %s", job.Jid)
+			}
 		}
 		return nil
 	}

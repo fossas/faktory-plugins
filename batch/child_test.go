@@ -3,7 +3,6 @@ package batch
 import (
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/server"
@@ -157,9 +156,6 @@ func TestChildFailureBlocksParentSuccess(t *testing.T) {
 			err = cl.Fail(fetchedChildJob.Jid, fmt.Errorf("terminal failure"), nil)
 			require.NoError(t, err)
 
-			// Wait for processing
-			time.Sleep(300 * time.Millisecond)
-
 			// Child complete callback should fire (pending=0 after first execution)
 			childComplete, err := cl.Fetch("callbacks")
 			require.NoError(t, err)
@@ -170,9 +166,6 @@ func TestChildFailureBlocksParentSuccess(t *testing.T) {
 			err = cl.Ack(childComplete.Jid)
 			require.NoError(t, err)
 
-			// Wait for processing
-			time.Sleep(300 * time.Millisecond)
-
 			// Parent complete callback should fire (all children's complete callbacks finished)
 			parentComplete, err := cl.Fetch("callbacks")
 			require.NoError(t, err)
@@ -182,9 +175,6 @@ func TestChildFailureBlocksParentSuccess(t *testing.T) {
 			// ACK parent complete callback
 			err = cl.Ack(parentComplete.Jid)
 			require.NoError(t, err)
-
-			// Wait for processing
-			time.Sleep(300 * time.Millisecond)
 
 			// Child had failures, so child success callback should NOT fire.
 			// Parent success callback should also NOT fire because child had failures.
