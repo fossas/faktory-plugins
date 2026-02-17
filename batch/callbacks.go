@@ -32,8 +32,8 @@ func (b *BatchSubsystem) checkAndFireCallbacks(ctx context.Context, s *server.Se
 
 	// We only fire callbacks when
 	//	- there are no pending jobs
-	//	- they have not already been enqueued or completed
-	if status.Pending > 0 && !(status.CompleteState == CallbackPending || status.SuccessState == CallbackPending) {
+	//	- they have already been enqueued or completed
+	if status.Pending > 0 || (status.CompleteState != CallbackPending && status.SuccessState != CallbackPending) {
 		return
 	}
 
