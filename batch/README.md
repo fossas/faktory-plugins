@@ -79,7 +79,7 @@ You can retrieve the status of a batch using the BATCH STATUS command. This retu
 
 ```
 BATCH STATUS bid
-{"bid":<bid>,"total":17,"pending":14,"failed":3","created_at":"2019-11-18T13:48:25Z","description":"..."}
+{"bid":<bid>,"total":17,"pending":14,"failed":3,"created_at":"2019-11-18T13:48:25Z","description":"..."}
 ```
 
 ## Client API support
