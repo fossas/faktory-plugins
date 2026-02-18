@@ -149,17 +149,17 @@ func (b *BatchSubsystem) fireCallback(ctx context.Context, bid string, callbackT
 
 	// Ensure Args is set (Faktory requires it)
 	if job.Args == nil {
-		job.Args = []interface{}{}
+		job.Args = []any{}
 	}
 
 	// Copy custom fields and add batch callback metadata
 	if callbackJob.Custom != nil {
-		job.Custom = make(map[string]interface{})
+		job.Custom = make(map[string]any)
 		for k, v := range callbackJob.Custom {
 			job.Custom[k] = v
 		}
 	} else {
-		job.Custom = make(map[string]interface{})
+		job.Custom = make(map[string]any)
 	}
 	job.Custom["_bid"] = bid
 	job.Custom["_cb"] = callbackType

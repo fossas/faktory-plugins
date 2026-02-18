@@ -98,7 +98,7 @@ func createBatch(ctx context.Context, s *server.Server, batch *client.Batch) err
 	pipe := rds.Pipeline()
 
 	// Store batch metadata as hash
-	pipe.HSet(ctx, batchMetaKey(batch.Bid), map[string]interface{}{
+	pipe.HSet(ctx, batchMetaKey(batch.Bid), map[string]any{
 		"parent_bid":  batch.ParentBid,
 		"description": batch.Description,
 		"success":     successJSON,

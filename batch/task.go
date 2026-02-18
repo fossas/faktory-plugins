@@ -45,7 +45,7 @@ func (t *batchSweepTask) Execute(ctx context.Context) error {
 
 // Stats returns statistics about the task
 func (t *batchSweepTask) Stats(ctx context.Context) map[string]any {
-	return map[string]interface{}{
+	return map[string]any{
 		"sweeps":          t.sweeps,
 		"batches_checked": t.batchesChecked,
 	}
