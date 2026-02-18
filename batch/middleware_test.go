@@ -375,6 +375,8 @@ func TestFailMiddleware(t *testing.T) {
 			assert.Equal(t, int64(1), status.Total)
 			assert.Equal(t, int64(0), status.Pending, "pending should be 0 after first execution (even if failed)")
 			assert.Equal(t, int64(0), status.Failed, "failed should be 0 when job will be retried")
+
+			cl.Flush()
 		})
 
 		t.Run("does not increment failed on non-first non-terminal failure", func(t *testing.T) {
