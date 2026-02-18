@@ -11,6 +11,7 @@ import (
 
 	"github.com/contribsys/faktory/util"
 	"github.com/contribsys/faktory/webui"
+	"github.com/justinas/nosurf"
 )
 
 // batchView holds all display data for a single batch in the web UI.
@@ -152,8 +153,17 @@ func (b *BatchSubsystem) buildBatchView(ctx context.Context, bid string) (*batch
 
 // batchesHandler serves the list page at /batches.
 func (b *BatchSubsystem) batchesHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if r.Method == "POST" {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if r.Form.Get("action") == "delete" {
+			for _, bid := range r.Form["bid"] {
+				b.deleteBatchTree(r.Context(), bid)
+			}
+		}
+		webui.Redirect(w, r, "/batches", http.StatusFound)
 		return
 	}
 
@@ -176,6 +186,7 @@ func (b *BatchSubsystem) batchesHandler(w http.ResponseWriter, r *http.Request) 
 		TotalCount: totalCount,
 		NextCursor: nextCursor,
 		Root:       r.Header.Get("X-Script-Name"),
+		CsrfToken:  nosurf.Token(r),
 	}
 
 	webui.Layout(w, r, func() {
@@ -251,6 +262,7 @@ type batchListData struct {
 	TotalCount int64
 	NextCursor uint64
 	Root       string
+	CsrfToken  string
 }
 
 type batchDetailData struct {
@@ -279,44 +291,54 @@ var batchListTmpl = template.Must(template.New("batchList").Funcs(tmplFuncs).Par
 </header>
 
 {{if .Batches}}
-<div class="table-responsive">
-  <table class="table table-hover table-bordered table-striped table-light">
-    <thead>
-      <tr>
-        <th>BID</th>
-        <th>Description</th>
-        <th>Created</th>
-        <th>Total</th>
-        <th>Pending</th>
-        <th>Failed</th>
-        <th>Succeeded</th>
-        <th>Complete CB</th>
-        <th>Success CB</th>
-      </tr>
-    </thead>
-    <tbody>
-      {{range .Batches}}
-      <tr>
-        <td><a href="{{$.Root}}/batches/{{.Bid}}">{{.Bid}}</a></td>
-        <td>{{.Description}}</td>
-        <td>{{relativeTime .CreatedAt}}</td>
-        <td>{{.Total}}</td>
-        <td>{{.Pending}}</td>
-        <td>{{if gt .Failed 0}}<span class="badge bg-danger">{{.Failed}}</span>{{else}}{{.Failed}}{{end}}</td>
-        <td>{{.Succeeded}}</td>
-        <td><span class="badge {{callbackBadgeClass .CompleteState}}">{{callbackBadge .CompleteState}}</span></td>
-        <td><span class="badge {{callbackBadgeClass .SuccessState}}">{{callbackBadge .SuccessState}}</span></td>
-      </tr>
-      {{end}}
-    </tbody>
-  </table>
-</div>
+<form action="{{.Root}}/batches" method="post">
+  <input type="hidden" name="csrf_token" value="{{.CsrfToken}}"/>
 
-{{if gt .NextCursor 0}}
-<nav>
-  <a href="{{.Root}}/batches?cursor={{.NextCursor}}" class="btn btn-primary">Next &gt;</a>
-</nav>
-{{end}}
+  <div class="table-responsive">
+    <table class="table table-hover table-bordered table-striped table-light">
+      <thead>
+        <tr>
+          <th class="checkbox-column"><input type="checkbox" class="check_all" /></th>
+          <th>BID</th>
+          <th>Description</th>
+          <th>Created</th>
+          <th>Total</th>
+          <th>Pending</th>
+          <th>Failed</th>
+          <th>Succeeded</th>
+          <th>Complete CB</th>
+          <th>Success CB</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Batches}}
+        <tr>
+          <td><input type="checkbox" name="bid" value="{{.Bid}}" /></td>
+          <td><a href="{{$.Root}}/batches/{{.Bid}}">{{.Bid}}</a></td>
+          <td>{{.Description}}</td>
+          <td>{{relativeTime .CreatedAt}}</td>
+          <td>{{.Total}}</td>
+          <td>{{.Pending}}</td>
+          <td>{{if gt .Failed 0}}<span class="badge bg-danger">{{.Failed}}</span>{{else}}{{.Failed}}{{end}}</td>
+          <td>{{.Succeeded}}</td>
+          <td><span class="badge {{callbackBadgeClass .CompleteState}}">{{callbackBadge .CompleteState}}</span></td>
+          <td><span class="badge {{callbackBadgeClass .SuccessState}}">{{callbackBadge .SuccessState}}</span></td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  <div class="row">
+    <div class="col-5">
+      <button class="btn btn-danger" type="submit" name="action" value="delete" data-confirm="Are you sure?">Delete</button>
+    </div>
+    <div class="col-7 d-flex justify-content-end">
+      {{if gt .NextCursor 0}}
+      <a href="{{.Root}}/batches?cursor={{.NextCursor}}" class="btn btn-primary">Next &gt;</a>
+      {{end}}
+    </div>
+  </div>
+</form>
 
 {{else}}
 <div class="alert alert-info" role="alert">
@@ -437,4 +459,3 @@ var batchDetailTmpl = template.Must(template.New("batchDetail").Funcs(tmplFuncs)
 </div>
 {{end}}
 `))
-
