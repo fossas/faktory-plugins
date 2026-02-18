@@ -51,10 +51,10 @@ func main() {
 	s.Register(webui.Subsystem(opts.WebBinding))
 
 	// fossa plugins
+	s.Register(new(batch.BatchSubsystem))
 	s.Register(new(uniq.UniqSubsystem))
 	s.Register(new(metrics.MetricsSubsystem))
 	s.Register(new(cron.CronSubsystem))
-	s.Register(new(batch.BatchSubsystem))
 	s.Register(new(expire.ExpireSubsystem))
 	s.Register(new(requeue.RequeueSubsystem))
 

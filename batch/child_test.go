@@ -1,490 +1,241 @@
 package batch
 
 import (
-	"context"
 	"fmt"
-	"sync"
 	"testing"
 
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/server"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestChildBatch(t *testing.T) {
-	batchSystem := new(BatchSubsystem)
-	ctx := context.Background()
+	withServer(func(s *server.Server, cl *client.Client) {
+		t.Run("creates child batch", func(t *testing.T) {
+			// Create parent batch
+			parentResult, err := cl.Generic(`BATCH NEW {"success":{"jobtype":"ParentCallback","queue":"callbacks"}}`)
+			require.NoError(t, err)
+			parentBid := string(parentResult)
 
-	t.Run("Nested children", func(t *testing.T) {
-		withServer([]server.Subsystem{batchSystem}, enableBatching, func(_ *server.Server, cl *client.Client) {
-			var batchA *client.Batch
-			var batchB *client.Batch
-			var batchA1 *client.Batch
-			var batchB1 *client.Batch
-			var batchC1 *client.Batch
-			var batchD1 *client.Batch
+			// Create child batch with parent_bid
+			childResult, err := cl.Generic(`BATCH NEW {"parent_bid":"` + parentBid + `","success":{"jobtype":"ChildCallback","queue":"callbacks"}}`)
+			require.NoError(t, err)
+			childBid := string(childResult)
 
-			b := client.NewBatch(cl)
-			b.Description = "top build"
-			b.Complete = client.NewJob("batchDone", 1, "string", 3)
-			b.Success = client.NewJob("batchSuccess", 2, "string", 4)
+			assert.NotEmpty(t, childBid)
+			assert.NotEqual(t, parentBid, childBid)
+		})
 
-			err := b.Jobs(func() error {
-				err := b.Push(client.NewJob("A", 1))
-				assert.Nil(t, err)
-				batchA = client.NewBatch(cl)
-				batchA.Description = "A"
-				batchA.Complete = client.NewJob("A.batchDone", 1, "string", 3)
-				batchA.Success = client.NewJob("A.batchSuccess", 2, "string", 4)
-				_, err = cl.BatchNew(batchA)
-				assert.Nil(t, err)
-				val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", b.Bid, batchA.Bid))
-				assert.Nil(t, err)
-				assert.Equal(t, val, "OK")
-
-				err = b.Push(client.NewJob("B", 2))
-				assert.Nil(t, err)
-				batchB = client.NewBatch(cl)
-				batchB.Description = "B"
-				batchB.Complete = client.NewJob("B.batchDone", 1, "string", 3)
-				batchB.Success = client.NewJob("B.batchSuccess", 2, "string", 4)
-				_, err = cl.BatchNew(batchB)
-				assert.Nil(t, err)
-				val, err = cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", b.Bid, batchB.Bid))
-				assert.Nil(t, err)
-				assert.Equal(t, val, "OK")
-
-				return nil
-			})
-			assert.Nil(t, err)
-			batchData, err := batchSystem.batchManager.getBatch(ctx, b.Bid)
-			assert.Nil(t, err)
-			assert.Len(t, batchData.Children, 2)
-
-			// job A depth 1
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.Equal(t, "A", job.Type)
-				batch, err := cl.BatchOpen(batchA.Bid)
-				assert.Nil(t, err)
-				err = batch.Jobs(func() error {
-					err := batch.Push(client.NewJob("A.1", 1))
-					assert.Nil(t, err)
-					batchA1 = client.NewBatch(cl)
-					batchA1.Description = "A1"
-					batchA1.Complete = client.NewJob("A.1.batchDone", 1, "string", 3)
-					batchA1.Success = client.NewJob("A.1.batchSuccess", 2, "string", 4)
-					_, err = cl.BatchNew(batchA1)
-					assert.Nil(t, err)
-					val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", batch.Bid, batchA1.Bid))
-					assert.Nil(t, err)
-					assert.Equal(t, val, "OK")
-
-					val, err = cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", batchA1.Bid, batch.Bid))
-					assert.Nil(t, err)
-					assert.Equal(t, val, "OK")
-					return nil
-				})
-				assert.Nil(t, err)
-			})
-			assert.Nil(t, err)
-
-			// job B depth 1
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.Equal(t, "B", job.Type)
-				batch, err := cl.BatchOpen(batchB.Bid)
-				assert.Nil(t, err)
-				err = batch.Jobs(func() error {
-					err := batch.Push(client.NewJob("B.1", 1))
-					assert.Nil(t, err)
-					batchB1 = client.NewBatch(cl)
-					batchB1.Description = "B1"
-					batchB1.Complete = client.NewJob("B.1.batchDone", 1, "string", 3)
-					batchB1.Success = client.NewJob("B.1.batchSuccess", 2, "string", 4)
-					_, err = cl.BatchNew(batchB1)
-					assert.Nil(t, err)
-					val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", batch.Bid, batchB1.Bid))
-					assert.Nil(t, err)
-					assert.Equal(t, val, "OK")
-
-					return nil
-				})
-				assert.Nil(t, err)
-			})
-			assert.Nil(t, err)
-
-			// job A.1 depth 2
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.Equal(t, "A.1", job.Type)
-				batch, err := cl.BatchOpen(batchA1.Bid)
-				assert.Nil(t, err)
-				err = batch.Jobs(func() error {
-					err := batch.Push(client.NewJob("C.1", 1))
-					assert.Nil(t, err)
-					batchC1 = client.NewBatch(cl)
-					batchC1.Description = "C1"
-					batchC1.Complete = client.NewJob("C.1.batchDone", 1, "string", 3)
-					batchC1.Success = client.NewJob("C.1.batchSuccess", 2, "string", 4)
-					_, err = cl.BatchNew(batchC1)
-					assert.Nil(t, err)
-					val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", batch.Bid, batchC1.Bid))
-					assert.Nil(t, err)
-					assert.Equal(t, val, "OK")
-
-					return nil
-				})
-				assert.Nil(t, err)
-			})
-			assert.Nil(t, err)
-
-			// job B.1 depth 2
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.Equal(t, "B.1", job.Type)
-				batch, err := cl.BatchOpen(batchB1.Bid)
-				assert.Nil(t, err)
-				err = batch.Jobs(func() error {
-					err := batch.Push(client.NewJob("D.1", 1))
-					assert.Nil(t, err)
-					batchD1 = client.NewBatch(cl)
-					batchD1.Description = "D1"
-					batchD1.Complete = client.NewJob("D.1.batchDone", 1, "string", 3)
-					batchD1.Success = client.NewJob("D.1.batchSuccess", 2, "string", 4)
-					_, err = cl.BatchNew(batchD1)
-					assert.Nil(t, err)
-					val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", batch.Bid, batchD1.Bid))
-					assert.Nil(t, err)
-					assert.Equal(t, val, "OK")
-
-					return nil
-				})
-				assert.Nil(t, err)
-			})
-			assert.Nil(t, err)
-
-			// job C.1 depth 3 relies on D
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.Equal(t, "C.1", job.Type)
-				batch, err := cl.BatchOpen(batchC1.Bid)
-				assert.Nil(t, err)
-				val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", batch.Bid, batchD1.Bid))
-				assert.Nil(t, err)
-				assert.Equal(t, val, "OK")
-				err = batch.Commit()
-				assert.Nil(t, err)
-			})
-			assert.Nil(t, err)
-
-			// job D.1 depth 3 from B.1 / depth 4 from C.1
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.Equal(t, "D.1", job.Type)
-				batch, err := cl.BatchOpen(batchD1.Bid)
-				assert.Nil(t, err)
-				// circular reference
-				val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", batch.Bid, batchA1.Bid))
-				assert.Equal(t, val, "OK")
-				assert.Nil(t, err)
-				err = batch.Commit()
-				assert.Nil(t, err)
-			})
-			assert.Nil(t, err)
-
-			assert.Nil(t, err)
-			assert.Equal(t, 2, batchData.Meta.Succeeded)
-			assert.Equal(t, 0, batchData.Meta.Failed)
-			assert.Equal(t, 0, batchData.Meta.Pending)
-			assert.True(t, batchSystem.batchManager.areBatchJobsCompleted(batchData))
-
-			// callback jobs
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.NotNil(t, job)
-				assert.Equal(t, "D.1.batchDone", job.Type)
-			})
-			assert.Nil(t, err)
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.NotNil(t, job)
-				assert.Equal(t, "D.1.batchSuccess", job.Type)
-			})
-			assert.Nil(t, err)
-
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.NotNil(t, job)
-				assert.Equal(t, "C.1.batchDone", job.Type)
-			})
-			assert.Nil(t, err)
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.NotNil(t, job)
-				assert.Equal(t, "C.1.batchSuccess", job.Type)
-			})
-			assert.Nil(t, err)
-
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.NotNil(t, job)
-				assert.Equal(t, "A.1.batchDone", job.Type)
-			})
-			assert.Nil(t, err)
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.NotNil(t, job)
-				assert.Equal(t, "A.1.batchSuccess", job.Type)
-			})
-			assert.Nil(t, err)
-
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.NotNil(t, job)
-				assert.Equal(t, "A.batchDone", job.Type)
-			})
-			assert.Nil(t, err)
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.NotNil(t, job)
-				assert.Equal(t, "A.batchSuccess", job.Type)
-			})
-			assert.Nil(t, err)
-
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.NotNil(t, job)
-				assert.Equal(t, "B.1.batchDone", job.Type)
-			})
-			assert.Nil(t, err)
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.NotNil(t, job)
-				assert.Equal(t, "B.1.batchSuccess", job.Type)
-			})
-			assert.Nil(t, err)
-
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.NotNil(t, job)
-				assert.Equal(t, "B.batchDone", job.Type)
-			})
-			assert.Nil(t, err)
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.NotNil(t, job)
-				assert.Equal(t, "B.batchSuccess", job.Type)
-			})
-			assert.Nil(t, err)
-
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.NotNil(t, job)
-				assert.Equal(t, "batchDone", job.Type)
-			})
-			assert.Nil(t, err)
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.NotNil(t, job)
-				assert.Equal(t, "batchSuccess", job.Type)
-			})
-			assert.Nil(t, err)
-
-			// batch A1 and B1 have not been committed as this point
-			assert.Equal(t, uint64(0), batchSystem.Server.Store().Scheduled().Size(ctx))
-			def, _ := batchSystem.Server.Store().GetQueue(ctx, "default")
-			assert.Equal(t, uint64(0), def.Size(ctx))
+		t.Run("rejects child batch with non-existent parent", func(t *testing.T) {
+			_, err := cl.Generic(`BATCH NEW {"parent_bid":"non-existent-parent","success":{"jobtype":"Callback"}}`)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "not found")
 		})
 	})
+}
 
-	t.Run("Set child depth", func(t *testing.T) {
-		ctx := context.Background()
+func TestChildBlocksParentCallback(t *testing.T) {
+	withServer(func(s *server.Server, cl *client.Client) {
+		t.Run("parent waits for child callback", func(t *testing.T) {
+			// Create parent batch
+			parentResult, err := cl.Generic(`BATCH NEW {"success":{"jobtype":"ParentCallback","queue":"callbacks"}}`)
+			require.NoError(t, err)
+			parentBid := string(parentResult)
 
-		withServer([]server.Subsystem{batchSystem}, enableBatching, func(_ *server.Server, cl *client.Client) {
-			var batchA *client.Batch
-			var batchB *client.Batch
-			var batchA1 *client.Batch
+			// Push a job to parent
+			parentJob := client.NewJob("ParentJob", 1)
+			parentJob.SetCustom("bid", parentBid)
+			err = cl.Push(parentJob)
+			require.NoError(t, err)
 
-			b := client.NewBatch(cl)
-			b.Description = "top build"
-			b.Complete = client.NewJob("batchDone", 1, "string", 3)
-			b.Success = client.NewJob("batchSuccess", 2, "string", 4)
+			// Create child batch
+			childResult, err := cl.Generic(`BATCH NEW {"parent_bid":"` + parentBid + `","success":{"jobtype":"ChildCallback","queue":"callbacks"}}`)
+			require.NoError(t, err)
+			childBid := string(childResult)
 
-			err := b.Jobs(func() error {
-				err := b.Push(client.NewJob("A", 1))
-				assert.Nil(t, err)
-				batchA = client.NewBatch(cl)
-				batchA.Description = "A"
-				batchA.Complete = client.NewJob("A.batchDone", 1, "string", 3)
-				batchA.Success = client.NewJob("A.batchSuccess", 2, "string", 4)
-				_, err = cl.BatchNew(batchA)
-				assert.Nil(t, err)
-				val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", b.Bid, batchA.Bid))
-				assert.Nil(t, err)
-				assert.Equal(t, val, "OK")
+			// Push a job to child
+			childJob := client.NewJob("ChildJob", 1)
+			childJob.SetCustom("bid", childBid)
+			err = cl.Push(childJob)
+			require.NoError(t, err)
 
-				err = b.Push(client.NewJob("B", 2))
-				assert.Nil(t, err)
-				batchB = client.NewBatch(cl)
-				batchB.Description = "B"
-				batchB.Complete = client.NewJob("B.batchDone", 1, "string", 3)
-				batchB.Success = client.NewJob("B.batchSuccess", 2, "string", 4)
-				_, err = cl.BatchNew(batchB)
-				assert.Nil(t, err)
-				val, err = cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", b.Bid, batchB.Bid))
-				assert.Nil(t, err)
-				assert.Equal(t, val, "OK")
+			// Commit both batches
+			_, err = cl.Generic("BATCH COMMIT " + childBid)
+			require.NoError(t, err)
+			_, err = cl.Generic("BATCH COMMIT " + parentBid)
+			require.NoError(t, err)
 
-				return nil
-			})
-			assert.Nil(t, err)
-			batchData, err := batchSystem.batchManager.getBatch(ctx, b.Bid)
-			assert.Nil(t, err)
-			assert.Len(t, batchData.Children, 2)
-			depth := 1
-			batchData.Meta.ChildSearchDepth = &depth
+			// Complete parent job
+			fetchedParentJob, err := cl.Fetch("default")
+			require.NoError(t, err)
+			require.NotNil(t, fetchedParentJob)
+			err = cl.Ack(fetchedParentJob.Jid)
+			require.NoError(t, err)
 
-			// job A depth 1
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.Equal(t, "A", job.Type)
-				batch, err := cl.BatchOpen(batchA.Bid)
-				assert.Nil(t, err)
-				err = batch.Jobs(func() error {
-					err := batch.Push(client.NewJob("A.1", 1))
-					assert.Nil(t, err)
-					batchA1 = client.NewBatch(cl)
-					batchA1.Description = "A1"
-					batchA1.Complete = client.NewJob("A.1.batchDone", 1, "string", 3)
-					batchA1.Success = client.NewJob("A.1.batchSuccess", 2, "string", 4)
-					_, err = cl.BatchNew(batchA1)
-					assert.Nil(t, err)
-					val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", batch.Bid, batchA1.Bid))
-					assert.Nil(t, err)
-					assert.Equal(t, val, "OK")
+			// Parent callback should not fire yet (child not done)
+			parentCallback, err := cl.Fetch("callbacks")
+			require.NoError(t, err)
+			assert.Nil(t, parentCallback, "parent callback should not fire until child completes")
 
-					return nil
-				})
-				assert.Nil(t, err)
-			})
-			assert.Nil(t, err)
+			// Complete child job
+			fetchedChildJob, err := cl.Fetch("default")
+			require.NoError(t, err)
+			require.NotNil(t, fetchedChildJob)
+			err = cl.Ack(fetchedChildJob.Jid)
+			require.NoError(t, err)
 
-			// job B depth 1
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.Equal(t, "B", job.Type)
-				batch, err := cl.BatchOpen(batchB.Bid)
-				assert.Nil(t, err)
-				err = batch.Jobs(func() error {
-					err := batch.Push(client.NewJob("B.1", 1))
-					assert.Nil(t, err)
+			// Child callback should fire
+			childCallback, err := cl.Fetch("callbacks")
+			require.NoError(t, err)
+			require.NotNil(t, childCallback, "child callback should fire")
+			assert.Equal(t, "ChildCallback", childCallback.Type)
 
-					return nil
-				})
-				assert.Nil(t, err)
-			})
+			// ACK child callback
+			err = cl.Ack(childCallback.Jid)
+			require.NoError(t, err)
 
-			assert.Nil(t, err)
-			assert.Equal(t, 2, batchData.Meta.Succeeded)
-			assert.Equal(t, 0, batchData.Meta.Failed)
-			assert.Equal(t, 0, batchData.Meta.Pending)
-			assert.True(t, batchSystem.batchManager.areBatchJobsCompleted(batchData))
-
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.NotNil(t, job)
-				assert.Equal(t, "A.1", job.Type)
-			})
-			assert.Nil(t, err)
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.NotNil(t, job)
-				assert.Equal(t, "B.1", job.Type)
-			})
-			assert.Nil(t, err)
-
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.NotNil(t, job)
-				assert.Equal(t, "B.batchDone", job.Type)
-			})
-			assert.Nil(t, err)
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.NotNil(t, job)
-				assert.Equal(t, "B.batchSuccess", job.Type)
-			})
-			assert.Nil(t, err)
-
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.NotNil(t, job)
-				assert.Equal(t, "batchDone", job.Type)
-			})
-			assert.Nil(t, err)
-			err = processJob(cl, true, func(job *client.Job) {
-				assert.NotNil(t, job)
-				assert.Equal(t, "batchSuccess", job.Type)
-			})
-			assert.Nil(t, err)
-			assert.Equal(t, uint64(0), batchSystem.Server.Store().Scheduled().Size(ctx))
-			def, _ := batchSystem.Server.Store().GetQueue(ctx, "default")
-			assert.Equal(t, uint64(0), def.Size(ctx))
+			// Now parent callback should fire
+			parentCallback, err = cl.Fetch("callbacks")
+			require.NoError(t, err)
+			require.NotNil(t, parentCallback, "parent callback should fire after child callback")
+			assert.Equal(t, "ParentCallback", parentCallback.Type)
 		})
 	})
+}
 
-	t.Run("Batch multiple parents", func(t *testing.T) {
-		withServer([]server.Subsystem{batchSystem}, enableBatching, func(s *server.Server, cl *client.Client) {
-			var batchA *client.Batch
-			b := client.NewBatch(cl)
-			b.Description = "top build"
-			b.Complete = client.NewJob("batchDone", 1, "string", 3)
-			b.Success = client.NewJob("batchSuccess", 2, "string", 4)
-			err := b.Jobs(func() error {
-				err := b.Push(client.NewJob("A", 1))
-				assert.Nil(t, err)
-				batchA = client.NewBatch(cl)
-				batchA.Complete = client.NewJob("batchDone", 1, "string", 3)
-				batchA.Success = client.NewJob("batchSuccess", 2, "string", 4)
-				_, err = cl.BatchNew(batchA)
-				assert.Nil(t, err)
-				val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", b.Bid, batchA.Bid))
-				assert.Nil(t, err)
-				assert.Equal(t, val, "OK")
-				return nil
-			})
-			assert.Nil(t, err)
+func TestChildFailureBlocksParentSuccess(t *testing.T) {
+	withServer(func(s *server.Server, cl *client.Client) {
+		t.Run("parent success callback does not fire when child has failures", func(t *testing.T) {
+			// BUG 3: Child batch with failures should prevent parent success callback.
+			// Previously, the child would be deleted (because failed>0 meant success
+			// would never fire), and the parent couldn't see the child's failure state.
 
-			// top leve build
-			b2 := client.NewBatch(cl)
-			b2.Description = "top build 2"
-			b2.Complete = client.NewJob("batchDone", 1, "string", 3)
-			b2.Success = client.NewJob("batchSuccess", 2, "string", 4)
+			// Create parent batch with success callback
+			parentResult, err := cl.Generic(`BATCH NEW {"success":{"jobtype":"ParentSuccess","queue":"callbacks"},"complete":{"jobtype":"ParentComplete","queue":"callbacks"}}`)
+			require.NoError(t, err)
+			parentBid := string(parentResult)
 
-			err = b2.Jobs(func() error {
-				val, err := cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", b2.Bid, batchA.Bid))
-				assert.Nil(t, err)
-				assert.Equal(t, val, "OK")
-				err = b2.Push(client.NewJob("B", 2))
-				assert.Nil(t, err)
-				batchB := client.NewBatch(cl)
-				batchB.Description = "B"
-				batchB.Complete = client.NewJob("B.batchDone", 1, "string", 3)
-				batchB.Success = client.NewJob("B.batchSuccess", 2, "string", 4)
-				_, err = cl.BatchNew(batchB)
-				assert.Nil(t, err)
-				val, err = cl.Generic(fmt.Sprintf("BATCH CHILD %s %s", b2.Bid, batchB.Bid))
-				assert.Nil(t, err)
-				assert.Equal(t, val, "OK")
+			// Create child batch with success and complete callbacks
+			childResult, err := cl.Generic(`BATCH NEW {"parent_bid":"` + parentBid + `","success":{"jobtype":"ChildSuccess","queue":"callbacks"},"complete":{"jobtype":"ChildComplete","queue":"callbacks"}}`)
+			require.NoError(t, err)
+			childBid := string(childResult)
 
-				return nil
-			})
-			assert.Nil(t, err)
-			topBatch, err := batchSystem.batchManager.getBatch(ctx, b.Bid)
-			assert.Nil(t, err)
-			assert.Len(t, topBatch.Children, 1)
+			// Push jobs to separate queues so we can fetch them independently
+			childJob := client.NewJob("ChildJob", 1)
+			childJob.Queue = "child_jobs"
+			childJob.SetCustom("bid", childBid)
+			retry := 0
+			childJob.Retry = &retry
+			err = cl.Push(childJob)
+			require.NoError(t, err)
 
-			topBatch2, err := batchSystem.batchManager.getBatch(ctx, b2.Bid)
-			assert.Nil(t, err)
-			assert.Len(t, topBatch2.Children, 2)
-			// build A
-			cl2, hb, err := getClient(s.Options.Binding)
-			assert.Nil(t, err)
-			defer cl2.Close()
-			defer hb()
+			parentJob := client.NewJob("ParentJob", 1)
+			parentJob.Queue = "parent_jobs"
+			parentJob.SetCustom("bid", parentBid)
+			err = cl.Push(parentJob)
+			require.NoError(t, err)
 
-			var wg sync.WaitGroup
-			wg.Add(2)
-			go func() {
-				defer wg.Done()
-				err = processJob(cl, true, nil)
-				assert.Nil(t, err)
-			}()
+			// Commit both batches
+			_, err = cl.Generic("BATCH COMMIT " + childBid)
+			require.NoError(t, err)
+			_, err = cl.Generic("BATCH COMMIT " + parentBid)
+			require.NoError(t, err)
 
-			// build B
-			go func() {
-				defer wg.Done()
-				err = processJob(cl2, true, nil)
-				assert.Nil(t, err)
-			}()
+			// Complete parent job
+			fetchedParentJob, err := cl.Fetch("parent_jobs")
+			require.NoError(t, err)
+			require.NotNil(t, fetchedParentJob)
+			err = cl.Ack(fetchedParentJob.Jid)
+			require.NoError(t, err)
 
-			wg.Wait()
-			assert.True(t, batchSystem.batchManager.areBatchJobsCompleted(topBatch))
-			assert.True(t, batchSystem.batchManager.areBatchJobsCompleted(topBatch2))
+			// Fail child job terminally
+			fetchedChildJob, err := cl.Fetch("child_jobs")
+			require.NoError(t, err)
+			require.NotNil(t, fetchedChildJob)
+			err = cl.Fail(fetchedChildJob.Jid, fmt.Errorf("terminal failure"), nil)
+			require.NoError(t, err)
+
+			// Child complete callback should fire (pending=0 after first execution)
+			childComplete, err := cl.Fetch("callbacks")
+			require.NoError(t, err)
+			require.NotNil(t, childComplete, "child complete callback should fire")
+			assert.Equal(t, "ChildComplete", childComplete.Type)
+
+			// ACK child complete callback
+			err = cl.Ack(childComplete.Jid)
+			require.NoError(t, err)
+
+			// Parent complete callback should fire (all children's complete callbacks finished)
+			parentComplete, err := cl.Fetch("callbacks")
+			require.NoError(t, err)
+			require.NotNil(t, parentComplete, "parent complete callback should fire")
+			assert.Equal(t, "ParentComplete", parentComplete.Type)
+
+			// ACK parent complete callback
+			err = cl.Ack(parentComplete.Jid)
+			require.NoError(t, err)
+
+			// Child had failures, so child success callback should NOT fire.
+			// Parent success callback should also NOT fire because child had failures.
+			remaining, err := cl.Fetch("callbacks")
+			require.NoError(t, err)
+			assert.Nil(t, remaining, "parent success callback should not fire when child had failures")
+		})
+	})
+}
+
+func TestNestedBatches(t *testing.T) {
+	withServer(func(s *server.Server, cl *client.Client) {
+		t.Run("three level nesting works", func(t *testing.T) {
+			// Create grandparent batch
+			grandparentResult, err := cl.Generic(`BATCH NEW {"success":{"jobtype":"GrandparentCallback","queue":"callbacks"}}`)
+			require.NoError(t, err)
+			grandparentBid := string(grandparentResult)
+
+			// Create parent batch
+			parentResult, err := cl.Generic(`BATCH NEW {"parent_bid":"` + grandparentBid + `","success":{"jobtype":"ParentCallback","queue":"callbacks"}}`)
+			require.NoError(t, err)
+			parentBid := string(parentResult)
+
+			// Create child batch
+			childResult, err := cl.Generic(`BATCH NEW {"parent_bid":"` + parentBid + `","success":{"jobtype":"ChildCallback","queue":"callbacks"}}`)
+			require.NoError(t, err)
+			childBid := string(childResult)
+
+			// Commit all batches (empty batches - callbacks fire when child callbacks complete)
+			_, err = cl.Generic("BATCH COMMIT " + childBid)
+			require.NoError(t, err)
+			_, err = cl.Generic("BATCH COMMIT " + parentBid)
+			require.NoError(t, err)
+			_, err = cl.Generic("BATCH COMMIT " + grandparentBid)
+			require.NoError(t, err)
+
+			// Child callback should fire first
+			callback1, err := cl.Fetch("callbacks")
+			require.NoError(t, err)
+			require.NotNil(t, callback1, "child callback should fire")
+			assert.Equal(t, "ChildCallback", callback1.Type)
+
+			// ACK child callback
+			err = cl.Ack(callback1.Jid)
+			require.NoError(t, err)
+
+			// Parent callback should fire next
+			callback2, err := cl.Fetch("callbacks")
+			require.NoError(t, err)
+			require.NotNil(t, callback2, "parent callback should fire")
+			assert.Equal(t, "ParentCallback", callback2.Type)
+
+			// ACK parent callback
+			err = cl.Ack(callback2.Jid)
+			require.NoError(t, err)
+
+			// Grandparent callback should fire last
+			callback3, err := cl.Fetch("callbacks")
+			require.NoError(t, err)
+			require.NotNil(t, callback3, "grandparent callback should fire")
+			assert.Equal(t, "GrandparentCallback", callback3.Type)
 		})
 	})
 }

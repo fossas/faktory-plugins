@@ -3,171 +3,218 @@ package batch
 import (
 	"context"
 	"fmt"
-	"time"
+	"strconv"
 
+	"github.com/contribsys/faktory/server"
 	"github.com/contribsys/faktory/util"
+	"github.com/redis/go-redis/v9"
 )
 
-func (m *batchManager) addChild(ctx context.Context, batch *batch, childBatch *batch) error {
-	if childBatch.Id == batch.Id {
-		return fmt.Errorf("addChild: child batch is the same as the parent")
+// addChildLua atomically checks that callback states are both pending (""),
+// then adds the child to the parent's children set. Returns 1 on success,
+// 0 if callbacks have already started.
+// KEYS[1] = complete_st, KEYS[2] = success_st, KEYS[3] = children set
+// ARGV[1] = child bid
+var addChildLua = redis.NewScript(`
+	local cs = redis.call("GET", KEYS[1]) or ""
+	local ss = redis.call("GET", KEYS[2]) or ""
+	if cs ~= "" or ss ~= "" then return 0 end
+	redis.call("SADD", KEYS[3], ARGV[1])
+	return 1
+`)
+
+// addChildBatch adds a child batch to a parent's children set
+func addChildBatch(ctx context.Context, s *server.Server, parentBid, childBid string) error {
+	// Verify parent exists
+	exists, err := batchExists(ctx, s, parentBid)
+	if err != nil {
+		return fmt.Errorf("failed to check parent batch: %w", err)
 	}
-	for _, child := range batch.Children {
-		if child.Id == childBatch.Id {
-			// avoid duplicates
-			return nil
-		}
+	if !exists {
+		return fmt.Errorf("parent batch %s not found", parentBid)
 	}
-	batch.Children = append(batch.Children, childBatch)
-	if err := m.rclient.SAdd(ctx, m.getChildKey(batch.Id), childBatch.Id).Err(); err != nil {
-		return fmt.Errorf("addChild: cannot save child (%s) to batch (%s) %v", childBatch.Id, batch.Id, err)
+
+	// Atomically check callback state and add child to parent's children set.
+	// This prevents a TOCTOU race where callbacks could fire between our state
+	// check and the SADD.
+	rds := s.Manager().Redis()
+	result, err := addChildLua.Run(ctx, rds,
+		[]string{
+			batchCompleteStateKey(parentBid),
+			batchSuccessStateKey(parentBid),
+			batchChildrenKey(parentBid),
+		},
+		childBid,
+	).Int64()
+	if err != nil {
+		return fmt.Errorf("failed to add child to parent: %w", err)
 	}
-	batch.Meta.ChildCount += 1
-	if err := m.rclient.HIncrBy(ctx, m.getMetaKey(batch.Id), "child_count", 1).Err(); err != nil {
-		return fmt.Errorf("addChild: cannot increment cihldren_count to batch (%s) %v", batch.Id, err)
+	if result == 0 {
+		return fmt.Errorf("cannot add child batch after parent callbacks have started")
 	}
-	if len(batch.Children) == 1 {
-		// only set expire when adding the first child
-		if err := m.rclient.Expire(ctx, m.getChildKey(batch.Id), time.Duration(m.Subsystem.Options.CommittedTimeoutDays)*time.Hour*24).Err(); err != nil {
-			util.Warnf("addChild: could not set expiration for set storing batch children: %v", err)
-		}
+
+	// Only set TTL on children key if parent is not yet committed.
+	// Committed parents have persistent keys; re-applying TTL would cause
+	// the children key to expire prematurely.
+	committed, err := isCommitted(ctx, s, parentBid)
+	if err != nil {
+		util.Warnf("batch children: failed to check committed state for parent %s, skipping TTL: %v", parentBid, err)
+	} else if !committed {
+		rds.Expire(ctx, batchChildrenKey(parentBid), BatchTTL)
 	}
-	if err := m.addParent(ctx, childBatch, batch); err != nil {
-		return fmt.Errorf("addChild: erorr adding parent batch (%s) to child (%s): %v", batch.Id, childBatch.Id, err)
-	}
-	if m.areBatchJobsCompleted(batch) {
-		m.handleBatchJobsCompleted(ctx, batch, map[string]bool{batch.Id: true, childBatch.Id: true})
-	}
+
+	util.Debugf("Added child batch %s to parent %s", childBid, parentBid)
 	return nil
 }
 
-func (m *batchManager) addParent(ctx context.Context, batch *batch, parentBatch *batch) error {
-	if parentBatch.Id == batch.Id {
-		return fmt.Errorf("addParent: parent batch is the same as the child")
+// getChildBatches returns all child batch IDs for a parent
+func getChildBatches(ctx context.Context, s *server.Server, parentBid string) ([]string, error) {
+	rds := s.Manager().Redis()
+	children, err := rds.SMembers(ctx, batchChildrenKey(parentBid)).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get children: %w", err)
 	}
-	for _, parent := range batch.Parents {
-		if parent.Id == parentBatch.Id {
-			// avoid duplicates
-			return nil
-		}
-	}
-	batch.Parents = append(batch.Parents, parentBatch)
-	if err := m.rclient.SAdd(ctx, m.getParentsKey(batch.Id), parentBatch.Id).Err(); err != nil {
-		return fmt.Errorf("addParent: %v", err)
-	}
-	if len(batch.Parents) == 1 {
-		// only set expire when adding the first parent
-		if err := m.rclient.Expire(ctx, m.getParentsKey(batch.Id), time.Duration(m.Subsystem.Options.CommittedTimeoutDays)*time.Hour*24).Err(); err != nil {
-			util.Warnf("addChild: could not set expiration for set storing batch children: %v", err)
-		}
-	}
-	return nil
+	return children, nil
 }
 
-func (m *batchManager) removeParent(ctx context.Context, batch *batch, parentBatch *batch) error {
-	for i, p := range batch.Parents {
-		if p.Id == parentBatch.Id {
-			batch.Parents = append(batch.Parents[:i], batch.Parents[i+1:]...)
-			break
-		}
+// checkChildrenStatus checks all child batches' complete and success callback states
+// plus their failure counters in a single pipeline (3N GETs, 1 round trip).
+//
+// Returns:
+//   - completeAllFinished: true if every child's complete callback is done (or not defined)
+//   - successAllFinished: true if every child's success callback is done (or not defined, or child has failures)
+//   - anyFailures: true if any child has failed > 0
+//   - err: non-nil on Redis errors
+func checkChildrenStatus(ctx context.Context, s *server.Server, parentBid string) (bool, bool, bool, error) {
+	children, err := getChildBatches(ctx, s, parentBid)
+	if err != nil {
+		util.Warnf("batch children: failed to get children for %s: %v", parentBid, err)
+		return false, false, false, err
 	}
-	if err := m.rclient.SRem(ctx, m.getParentsKey(batch.Id), parentBatch.Id).Err(); err != nil {
-		return fmt.Errorf("removeParent: could not remove parent %v", err)
-	}
-	return nil
-}
 
-func (m *batchManager) removeChild(ctx context.Context, batch *batch, childBatch *batch) error {
-	batch.Meta.ChildCount -= 1
-	for i, c := range batch.Children {
-		if c.Id == childBatch.Id {
-			batch.Children = append(batch.Children[:i], batch.Children[i+1:]...)
-			break
-		}
+	if len(children) == 0 {
+		return true, true, false, nil
 	}
-	if err := m.rclient.HIncrBy(ctx, m.getMetaKey(batch.Id), "child_count", -1).Err(); err != nil {
-		return fmt.Errorf("handleChildComplete: cannot decrement cihldren_count to batch (%s) %v", batch.Id, err)
-	}
-	return nil
-}
 
-func (m *batchManager) removeChildren(ctx context.Context, b *batch) {
-	// locking must be handled outside of function
-	if len(b.Children) > 0 {
-		b.Children = []*batch{}
-		if err := m.rclient.Del(ctx, m.getChildKey(b.Id)).Err(); err != nil {
-			util.Warnf("removeChildren: unable to remove child batches from %s: %v", b.Id, err)
-		}
-		b.Meta.ChildCount = 0
-		if err := m.rclient.HSet(ctx, m.getMetaKey(b.Id), "child_count", 0).Err(); err != nil {
-			util.Warnf("removeChildren: unable to remove child batches from %s: %v", b.Id, err)
-		}
-	}
-}
+	rds := s.Manager().Redis()
 
-func (m *batchManager) handleChildComplete(ctx context.Context, batch *batch, childBatch *batch, areChildsChildrenFinished bool, areChildsChildrenSucceeded bool, parentsVisited map[string]bool) {
-	if areChildsChildrenFinished && areChildsChildrenSucceeded {
-		// batch can be removed as a parent to stop propagation
-		if err := m.removeParent(ctx, childBatch, batch); err != nil {
-			util.Warnf("childCompleted: unable to remove parent (%s) from (%s): %v", batch.Id, childBatch.Id, err)
-		}
-		// remove child
-		if err := m.removeChild(ctx, batch, childBatch); err != nil {
-			util.Warnf("childCompleted: unable to remove child (%s) from (%s): %v", childBatch.Id, batch.Id, err)
+	// Pipeline: for each child, GET complete_st + GET success_st + GET failed
+	pipe := rds.TxPipeline()
+	type childCmds struct {
+		bid           string
+		completeStCmd *redis.StringCmd
+		successStCmd  *redis.StringCmd
+		failedCmd     *redis.StringCmd
+	}
+	cmds := make([]childCmds, len(children))
+	for i, childBid := range children {
+		cmds[i] = childCmds{
+			bid:           childBid,
+			completeStCmd: pipe.Get(ctx, batchCompleteStateKey(childBid)),
+			successStCmd:  pipe.Get(ctx, batchSuccessStateKey(childBid)),
+			failedCmd:     pipe.Get(ctx, batchFailedKey(childBid)),
 		}
 	}
-	if m.areBatchJobsCompleted(batch) {
-		m.handleBatchJobsCompleted(ctx, batch, parentsVisited)
-	}
-}
 
-func (m *batchManager) areChildrenFinished(b *batch) (bool, bool) {
-	if len(b.Children) != b.Meta.ChildCount && b.Meta.ChildCount != 0 {
-		return false, false
+	_, err = pipe.Exec(ctx)
+	if err != nil && err != redis.Nil {
+		util.Warnf("batch children: pipeline error for %s: %v", parentBid, err)
+		return false, false, false, err
 	}
-	// iterate through children up to a certain depth
-	// check to see if any batch still has jobs being processed
-	currentDepth := 1
-	visited := map[string]bool{b.Id: true} // handle circular cases
-	stack := b.Children
-	var childStack []*batch
-	var child *batch
-	var maxSearchDepth int
-	succeeded := true
-	if b.Meta.ChildSearchDepth != nil {
-		maxSearchDepth = *b.Meta.ChildSearchDepth
-	} else {
-		maxSearchDepth = m.Subsystem.Options.ChildSearchDepth
-	}
-	for len(stack) > 0 {
-		child, stack = stack[0], stack[1:]
-		if visited[child.Id] {
-			goto nextDepth
+
+	completeAllFinished := true
+	successAllFinished := true
+	anyFailures := false
+
+	for _, c := range cmds {
+		// Parse failed counter
+		failed, err := strconv.ParseInt(c.failedCmd.Val(), 10, 64)
+		if err != nil && c.failedCmd.Val() != "" {
+			util.Warnf("batch children: failed to parse failed counter for child %s: %v", c.bid, err)
+			return false, false, anyFailures, err
 		}
-		visited[child.Id] = true
-		if !m.areBatchJobsCompleted(child) {
-			return false, false
-		}
-		if len(child.Children) != child.Meta.ChildCount && child.Meta.ChildCount != 0 {
-			// one of the child batches timed out
-			return false, false
-		}
-		if succeeded && !m.areBatchJobsSucceeded(child) {
-			succeeded = false
-		}
-		if len(child.Children) > 0 {
-			childStack = append(childStack, child.Children...)
+		if failed > 0 {
+			anyFailures = true
 		}
 
-	nextDepth:
-		if len(stack) == 0 && len(childStack) > 0 {
-			if currentDepth == maxSearchDepth {
-				return true, succeeded
+		// Check complete callback state
+		completeSt, completeErr := c.completeStCmd.Result()
+		if completeErr == redis.Nil {
+			// Child batch cleaned up, treat as finished
+			util.Debugf("batch children: child %s complete state not found, assuming finished", c.bid)
+		} else if completeErr != nil {
+			util.Warnf("batch children: error reading complete state for child %s: %v", c.bid, completeErr)
+			return false, false, anyFailures, completeErr
+		} else if completeSt != CallbackFinished {
+			if hasCompleteCallback(ctx, s, c.bid) {
+				util.Debugf("batch children: child %s complete callback not finished (state=%s)", c.bid, completeSt)
+				completeAllFinished = false
 			}
-			currentDepth += 1
-			stack = childStack
-			childStack = []*batch{}
+		}
+
+		// Check success callback state
+		successSt, successErr := c.successStCmd.Result()
+		if successErr == redis.Nil {
+			// Child batch cleaned up, treat as finished
+			util.Debugf("batch children: child %s success state not found, assuming finished", c.bid)
+		} else if successErr != nil {
+			util.Warnf("batch children: error reading success state for child %s: %v", c.bid, successErr)
+			return false, false, anyFailures, successErr
+		} else if successSt == CallbackFinished {
+			// Already finished, nothing to do
+		} else if failed > 0 {
+			// Child has failures — its success callback can never fire.
+			// Treat as "done" so we don't block the parent forever.
+			util.Debugf("batch children: child %s has failures, success callback will never fire", c.bid)
+		} else if hasSuccessCallback(ctx, s, c.bid) {
+			util.Debugf("batch children: child %s success callback not finished (state=%s)", c.bid, successSt)
+			successAllFinished = false
 		}
 	}
-	return true, succeeded
+
+	if completeAllFinished {
+		util.Debugf("batch children: all children of %s have finished complete callbacks", parentBid)
+	}
+	if successAllFinished {
+		util.Debugf("batch children: all children of %s have finished success callbacks", parentBid)
+	}
+	return completeAllFinished, successAllFinished, anyFailures, nil
+}
+
+// anyChildHasFailures checks if any child batch has failed > 0.
+// It pipelines GET failed for all children in a single round trip.
+func anyChildHasFailures(ctx context.Context, s *server.Server, parentBid string) (bool, error) {
+	children, err := getChildBatches(ctx, s, parentBid)
+	if err != nil {
+		util.Warnf("batch children: failed to get children for %s: %v", parentBid, err)
+		return false, err
+	}
+
+	if len(children) == 0 {
+		return false, nil
+	}
+
+	rds := s.Manager().Redis()
+	pipe := rds.TxPipeline()
+	failedCmds := make([]*redis.StringCmd, len(children))
+	for i, childBid := range children {
+		failedCmds[i] = pipe.Get(ctx, batchFailedKey(childBid))
+	}
+
+	_, err = pipe.Exec(ctx)
+	if err != nil && err != redis.Nil {
+		return false, err
+	}
+
+	for i, cmd := range failedCmds {
+		failed, err := strconv.ParseInt(cmd.Val(), 10, 64)
+		if err != nil && cmd.Val() != "" {
+			util.Warnf("batch children: failed to parse failed counter for child %s: %v", children[i], err)
+			return false, err
+		}
+		if failed > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
