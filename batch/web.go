@@ -58,7 +58,7 @@ func (b *BatchSubsystem) listBatchPage(ctx context.Context, cursor uint64, pageS
 
 	views := make([]batchView, 0, len(bids))
 	for _, bid := range bids {
-		v, err := b.buildBatchView(ctx, bid)
+		v, err := b.buildBatchView(ctx, bid, nil)
 		if err != nil {
 			util.Warnf("batch web: failed to load batch %s: %v", bid, err)
 			continue
@@ -76,19 +76,24 @@ func (b *BatchSubsystem) listBatchPage(ctx context.Context, cursor uint64, pageS
 
 // getBatchDetail returns the full batch view and its children's views.
 func (b *BatchSubsystem) getBatchDetail(ctx context.Context, bid string) (*batchView, []batchView, error) {
-	v, err := b.buildBatchView(ctx, bid)
+	children, err := getChildBatches(ctx, b.Server, bid)
+	if err != nil {
+		util.Warnf("batch web: failed to get child batches for %s: %v", bid, err)
+		children = nil
+	}
+
+	v, err := b.buildBatchView(ctx, bid, children)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	children, err := getChildBatches(ctx, b.Server, bid)
-	if err != nil {
+	if children == nil {
 		return v, nil, nil
 	}
 
 	childViews := make([]batchView, 0, len(children))
 	for _, childBid := range children {
-		cv, err := b.buildBatchView(ctx, childBid)
+		cv, err := b.buildBatchView(ctx, childBid, nil)
 		if err != nil {
 			util.Warnf("batch web: failed to load child batch %s: %v", childBid, err)
 			continue
@@ -104,7 +109,10 @@ func (b *BatchSubsystem) getBatchDetail(ctx context.Context, bid string) (*batch
 }
 
 // buildBatchView constructs a batchView from Redis data for a single batch.
-func (b *BatchSubsystem) buildBatchView(ctx context.Context, bid string) (*batchView, error) {
+// If children is non-nil, it is used directly for the child count instead of
+// fetching from Redis, avoiding a redundant call when the caller already has
+// the children list.
+func (b *BatchSubsystem) buildBatchView(ctx context.Context, bid string, children []string) (*batchView, error) {
 	status, err := getBatchStatus(ctx, b.Server, bid)
 	if err != nil {
 		return nil, err
@@ -115,11 +123,13 @@ func (b *BatchSubsystem) buildBatchView(ctx context.Context, bid string) (*batch
 		return nil, err
 	}
 
-	children, err := getChildBatches(ctx, b.Server, bid)
-	childCount := 0
-	if err == nil {
-		childCount = len(children)
+	if children == nil {
+		fetched, err := getChildBatches(ctx, b.Server, bid)
+		if err == nil {
+			children = fetched
+		}
 	}
+	childCount := len(children)
 
 	succeeded := status.Total - status.Pending - status.Failed
 	if succeeded < 0 {
@@ -177,7 +187,8 @@ func (b *BatchSubsystem) batchesHandler(w http.ResponseWriter, r *http.Request) 
 
 	batches, nextCursor, totalCount, err := b.listBatchPage(r.Context(), cursor, batchPageSize)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		util.Warnf("batch web: failed to list batches: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -213,7 +224,8 @@ func (b *BatchSubsystem) batchDetailHandler(w http.ResponseWriter, r *http.Reque
 
 	batch, children, err := b.getBatchDetail(r.Context(), bid)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		util.Warnf("batch web: failed to load batch detail %s: %v", bid, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -438,6 +450,7 @@ var batchDetailTmpl = template.Must(template.New("batchDetail").Funcs(tmplFuncs)
         <th>Total</th>
         <th>Pending</th>
         <th>Failed</th>
+        <th>Succeeded</th>
         <th>Complete CB</th>
         <th>Success CB</th>
       </tr>
@@ -450,6 +463,7 @@ var batchDetailTmpl = template.Must(template.New("batchDetail").Funcs(tmplFuncs)
         <td>{{.Total}}</td>
         <td>{{.Pending}}</td>
         <td>{{if gt .Failed 0}}<span class="badge bg-danger">{{.Failed}}</span>{{else}}{{.Failed}}{{end}}</td>
+        <td>{{.Succeeded}}</td>
         <td><span class="badge {{callbackBadgeClass .CompleteState}}">{{callbackBadge .CompleteState}}</span></td>
         <td><span class="badge {{callbackBadgeClass .SuccessState}}">{{callbackBadge .SuccessState}}</span></td>
       </tr>
