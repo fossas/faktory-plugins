@@ -95,7 +95,7 @@ func createBatch(ctx context.Context, s *server.Server, batch *client.Batch) err
 	}
 
 	// Use pipeline for atomic batch creation
-	pipe := rds.Pipeline()
+	pipe := rds.TxPipeline()
 
 	// Store batch metadata as hash
 	pipe.HSet(ctx, batchMetaKey(batch.Bid), map[string]any{

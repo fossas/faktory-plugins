@@ -178,6 +178,9 @@ func TestDirectToMorgueFailure(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, completeCallback, "complete callback should fire")
 			assert.Equal(t, "CompleteCallback", completeCallback.Type)
+			bidValue, ok := completeCallback.GetCustom("_bid")
+			assert.True(t, ok)
+			assert.Equal(t, bid, bidValue)
 
 			// Success callback should NOT fire since there's a failure
 			successCallback, err := cl.Fetch("callbacks")

@@ -97,6 +97,8 @@ func (b *BatchSubsystem) ackMiddleware(ctx context.Context, next func() error) e
 			} else {
 				util.Warnf("batch ack middleware: invalid _bid or _cb type for job %s", job.Jid)
 			}
+		} else {
+			util.Warnf("batch ack middleware: job %s has _cb but missing _bid", job.Jid)
 		}
 		return nil
 	}
@@ -162,6 +164,8 @@ func (b *BatchSubsystem) failMiddleware(ctx context.Context, next func() error) 
 			} else {
 				util.Warnf("batch fail middleware: invalid _bid or _cb type for job %s", job.Jid)
 			}
+		} else {
+			util.Warnf("batch fail middleware: job %s has _cb but missing _bid", job.Jid)
 		}
 		return nil
 	}

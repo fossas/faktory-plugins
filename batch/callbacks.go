@@ -139,6 +139,8 @@ func (b *BatchSubsystem) fireCallback(ctx context.Context, bid string, callbackT
 
 	// Create a copy of the callback job with required fields
 	job := &client.Job{
+		// Faktory interally uses a random string for the JID, but FOSSA Core uses UUIDs.
+		// We're intentionally using a UUID here to match that expectation.
 		Jid:       uuid.NewString(),
 		Type:      callbackJob.Type,
 		Args:      callbackJob.Args,
