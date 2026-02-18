@@ -125,7 +125,9 @@ func (b *BatchSubsystem) buildBatchView(ctx context.Context, bid string, childre
 
 	if children == nil {
 		fetched, err := getChildBatches(ctx, b.Server, bid)
-		if err == nil {
+		if err != nil {
+			util.Warnf("batch web: failed to get child batches for %s: %v", bid, err)
+		} else {
 			children = fetched
 		}
 	}
@@ -165,7 +167,8 @@ func (b *BatchSubsystem) buildBatchView(ctx context.Context, bid string, childre
 func (b *BatchSubsystem) batchesHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		if err := r.ParseForm(); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			util.Warnf("batch web: failed to parse form: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
 		if r.Form.Get("action") == "delete" {
@@ -216,7 +219,11 @@ func (b *BatchSubsystem) batchDetailHandler(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Extract BID from URL path: /batches/{bid}
+	// Take only the first path segment to ignore trailing segments like /batches/b-123/extra.
 	bid := strings.TrimPrefix(r.URL.Path, "/batches/")
+	if i := strings.IndexByte(bid, '/'); i >= 0 {
+		bid = bid[:i]
+	}
 	if bid == "" {
 		webui.Redirect(w, r, "/batches", http.StatusFound)
 		return
