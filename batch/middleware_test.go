@@ -376,5 +376,66 @@ func TestFailMiddleware(t *testing.T) {
 			assert.Equal(t, int64(0), status.Pending, "pending should be 0 after first execution (even if failed)")
 			assert.Equal(t, int64(0), status.Failed, "failed should be 0 when job will be retried")
 		})
+
+		t.Run("does not increment failed on non-first non-terminal failure", func(t *testing.T) {
+			ctx := context.Background()
+
+			// Create batch with complete callback + a holding job to keep batch alive
+			result, err := cl.Generic(`BATCH NEW {"complete":{"jobtype":"CompleteCallback","queue":"callbacks"}}`)
+			require.NoError(t, err)
+			bid := string(result)
+
+			// Push retryable job
+			job := client.NewJob("RetryableTestJob2", 1)
+			job.SetCustom("bid", bid)
+			retry := 5
+			job.Retry = &retry
+			job.Queue = "default"
+			err = cl.Push(job)
+			require.NoError(t, err)
+
+			// Push holding job to keep batch alive
+			holdingJob := client.NewJob("HoldingJob", 1)
+			holdingJob.SetCustom("bid", bid)
+			holdingJob.Queue = "holding"
+			err = cl.Push(holdingJob)
+			require.NoError(t, err)
+
+			// Commit batch
+			_, err = cl.Generic("BATCH COMMIT " + bid)
+			require.NoError(t, err)
+
+			// Fetch and FAIL the job (first failure) → pending decrements, failed stays 0
+			fetchedJob, err := cl.Fetch("default")
+			require.NoError(t, err)
+			require.NotNil(t, fetchedJob)
+			assert.Equal(t, job.Jid, fetchedJob.Jid)
+
+			err = cl.Fail(fetchedJob.Jid, fmt.Errorf("transient error"), nil)
+			require.NoError(t, err)
+
+			// Move job from retry set back to its queue
+			_, err = s.Manager().RetryJobs(ctx, time.Now().Add(time.Hour))
+			require.NoError(t, err)
+
+			// Fetch retried job and FAIL it again (second failure, still has retries)
+			retriedJob, err := cl.Fetch("default")
+			require.NoError(t, err)
+			require.NotNil(t, retriedJob, "retried job should be back on the default queue")
+			assert.Equal(t, job.Jid, retriedJob.Jid)
+
+			err = cl.Fail(retriedJob.Jid, fmt.Errorf("transient error again"), nil)
+			require.NoError(t, err)
+
+			// Check counters: failed should still be 0 (non-first, non-terminal path)
+			statusResult, err := cl.Generic("BATCH STATUS " + bid)
+			require.NoError(t, err)
+
+			var status client.BatchStatus
+			err = json.Unmarshal([]byte(statusResult), &status)
+			require.NoError(t, err)
+
+			assert.Equal(t, int64(0), status.Failed, "failed should be 0 on non-first non-terminal failure")
+		})
 	})
 }
