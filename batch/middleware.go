@@ -112,11 +112,22 @@ func (b *BatchSubsystem) ackMiddleware(ctx context.Context, next func() error) e
 		return nil
 	}
 
-	// Decrement pending counter
 	rds := b.Server.Manager().Redis()
-	pending, err := rds.Decr(ctx, batchPendingKey(bid)).Result()
-	if err != nil {
-		util.Warnf("batch ack middleware: failed to decrement pending for batch %s: %v", bid, err)
+	var pending int64
+
+	// Only decrement on first execution — if the job previously failed,
+	// pending was already decremented by failMiddleware on first failure.
+	isFirstExecution := job.Failure == nil
+	if isFirstExecution {
+		pending, err = rds.Decr(ctx, batchPendingKey(bid)).Result()
+		if err != nil {
+			util.Warnf("batch ack middleware: failed to decrement pending for batch %s: %v", bid, err)
+		}
+	} else {
+		pending, err = rds.Get(ctx, batchPendingKey(bid)).Int64()
+		if err != nil {
+			util.Warnf("batch ack middleware: failed to get pending for batch %s: %v", bid, err)
+		}
 	}
 
 	util.Debugf("Job %s in batch %s completed (ACK)", job.Jid, bid)
@@ -168,7 +179,7 @@ func (b *BatchSubsystem) failMiddleware(ctx context.Context, next func() error) 
 
 	// Determine if this is the first execution or a retry
 	// job.Failure.RetryCount is 0 on first failure, incremented for each retry
-	isFirstExecution := job.Failure == nil || job.Failure.RetryCount == 0
+	isFirstExecution := job.Failure != nil && job.Failure.RetryCount == 0
 
 	// Determine if this is a terminal failure (no more retries)
 	// A job is terminally failed when:

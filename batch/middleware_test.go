@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/server"
@@ -236,6 +237,69 @@ func TestCallbackJobTerminalFailure(t *testing.T) {
 			require.NotNil(t, successCallback, "success callback should fire after complete callback terminally fails")
 			assert.Equal(t, "SuccessCallback", successCallback.Type)
 		})
+	})
+}
+
+func TestRetryThenSuccessDoesNotDoubleDecrementPending(t *testing.T) {
+	withServer(func(s *server.Server, cl *client.Client) {
+		ctx := context.Background()
+
+		// Create batch with both callbacks
+		result, err := cl.Generic(`BATCH NEW {"complete":{"jobtype":"CompleteCallback","queue":"callbacks"},"success":{"jobtype":"SuccessCallback","queue":"callbacks"}}`)
+		require.NoError(t, err)
+		bid := string(result)
+
+		// Push job1 (retryable, on "default" queue) and job2 (on "holding" queue to keep batch alive)
+		job1 := client.NewJob("RetryableJob", 1)
+		job1.SetCustom("bid", bid)
+		retry := 5
+		job1.Retry = &retry
+		job1.Queue = "default"
+		err = cl.Push(job1)
+		require.NoError(t, err)
+
+		job2 := client.NewJob("HoldingJob", 1)
+		job2.SetCustom("bid", bid)
+		job2.Queue = "holding"
+		err = cl.Push(job2)
+		require.NoError(t, err)
+
+		// Commit batch → pending=2
+		_, err = cl.Generic("BATCH COMMIT " + bid)
+		require.NoError(t, err)
+
+		// Fetch job1 from "default" and FAIL it → pending should go 2→1
+		fetchedJob1, err := cl.Fetch("default")
+		require.NoError(t, err)
+		require.NotNil(t, fetchedJob1)
+		assert.Equal(t, job1.Jid, fetchedJob1.Jid)
+
+		err = cl.Fail(fetchedJob1.Jid, fmt.Errorf("transient error"), nil)
+		require.NoError(t, err)
+
+		// Move job1 from retry set back to its queue
+		_, err = s.Manager().RetryJobs(ctx, time.Now().Add(time.Hour))
+		require.NoError(t, err)
+
+		// Fetch retried job1 from "default" and ACK it
+		retriedJob1, err := cl.Fetch("default")
+		require.NoError(t, err)
+		require.NotNil(t, retriedJob1, "retried job1 should be back on the default queue")
+		assert.Equal(t, job1.Jid, retriedJob1.Jid)
+
+		err = cl.Ack(retriedJob1.Jid)
+		require.NoError(t, err)
+
+		// Check batch status
+		statusResult, err := cl.Generic("BATCH STATUS " + bid)
+		require.NoError(t, err)
+
+		var status client.BatchStatus
+		err = json.Unmarshal([]byte(statusResult), &status)
+		require.NoError(t, err)
+
+		assert.Equal(t, int64(1), status.Pending, "pending should be 1 (only job2 remains); double decrement bug if 0")
+		assert.Equal(t, int64(0), status.Failed, "failed should be 0 (job1 eventually succeeded)")
 	})
 }
 
