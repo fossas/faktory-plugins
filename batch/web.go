@@ -180,6 +180,11 @@ func (b *BatchSubsystem) batchesHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if r.Method != "GET" {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
 	cursor := uint64(0)
 	if c := r.URL.Query().Get("cursor"); c != "" {
 		parsed, err := strconv.ParseUint(c, 10, 64)
