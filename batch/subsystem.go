@@ -3,6 +3,7 @@ package batch
 import (
 	"github.com/contribsys/faktory/server"
 	"github.com/contribsys/faktory/util"
+	"github.com/contribsys/faktory/webui"
 )
 
 // Ensure BatchSubsystem implements server.Subsystem
@@ -26,6 +27,35 @@ func (b *BatchSubsystem) Start(s *server.Server) error {
 
 	// Register cleanup task
 	s.AddTask(60, &batchSweepTask{subsystem: b})
+
+	// Find WebUI lifecycle and register routes + tab
+	var foundWebui bool
+	for _, sub := range s.Subsystems {
+		if lifecycle, ok := sub.(*webui.Lifecycle); ok {
+			foundWebui = true
+			ui := lifecycle.WebUI
+			util.Debugf("BatchSubsystem: WebUI lifecycle found, registering /batches routes")
+			hasBatchesTab := false
+			for _, tab := range webui.DefaultTabs {
+				if tab.Name == "Batches" || tab.Path == "/batches" {
+					hasBatchesTab = true
+					break
+				}
+			}
+			if !hasBatchesTab {
+				webui.DefaultTabs = append(webui.DefaultTabs, webui.Tab{
+					Name: "Batches",
+					Path: "/batches",
+				})
+				ui.App.HandleFunc("/batches", webui.Log(ui, b.batchesHandler))
+				ui.App.HandleFunc("/batches/", webui.Log(ui, b.batchDetailHandler))
+			}
+			break
+		}
+	}
+	if !foundWebui {
+		util.Debugf("BatchSubsystem: no WebUI found")
+	}
 
 	util.Info("Loaded batch jobs plugin")
 	return nil

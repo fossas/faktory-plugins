@@ -3,6 +3,7 @@ package batch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -29,6 +30,9 @@ const (
 	CallbackEnqueued = "1" // Callback job has been pushed to queue
 	CallbackFinished = "2" // Callback job completed successfully
 )
+
+// ErrBatchNotFound is returned when a batch ID does not exist in Redis.
+var ErrBatchNotFound = errors.New("batch not found")
 
 // Redis key helpers
 
@@ -144,7 +148,7 @@ func getBatch(ctx context.Context, s *server.Server, bid string) (*client.Batch,
 		return nil, fmt.Errorf("failed to get batch: %w", err)
 	}
 	if len(data) == 0 {
-		return nil, fmt.Errorf("batch %s not found", bid)
+		return nil, fmt.Errorf("batch %s: %w", bid, ErrBatchNotFound)
 	}
 
 	batch := &client.Batch{
@@ -182,7 +186,7 @@ func getBatchStatus(ctx context.Context, s *server.Server, bid string) (*client.
 		return nil, fmt.Errorf("failed to get batch metadata: %w", err)
 	}
 	if len(data) == 0 {
-		return nil, fmt.Errorf("batch %s not found", bid)
+		return nil, fmt.Errorf("batch %s: %w", bid, ErrBatchNotFound)
 	}
 
 	// Get counters and states
