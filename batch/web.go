@@ -2,6 +2,7 @@ package batch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -188,9 +189,11 @@ func (b *BatchSubsystem) batchesHandler(w http.ResponseWriter, r *http.Request) 
 	cursor := uint64(0)
 	if c := r.URL.Query().Get("cursor"); c != "" {
 		parsed, err := strconv.ParseUint(c, 10, 64)
-		if err == nil {
-			cursor = parsed
+		if err != nil {
+			http.Error(w, "invalid cursor", http.StatusBadRequest)
+			return
 		}
+		cursor = parsed
 	}
 
 	batches, nextCursor, totalCount, err := b.listBatchPage(r.Context(), cursor, batchPageSize)
@@ -236,6 +239,10 @@ func (b *BatchSubsystem) batchDetailHandler(w http.ResponseWriter, r *http.Reque
 
 	batch, children, err := b.getBatchDetail(r.Context(), bid)
 	if err != nil {
+		if errors.Is(err, ErrBatchNotFound) {
+			http.Error(w, "batch not found", http.StatusNotFound)
+			return
+		}
 		util.Warnf("batch web: failed to load batch detail %s: %v", bid, err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
