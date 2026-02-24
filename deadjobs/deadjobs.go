@@ -41,7 +41,7 @@ func (d *DeadJobCleanupSubsystem) Start(s *server.Server) error {
 		return nil
 	}
 
-	s.AddTask(d.Options.IntervalSeconds, &deadJobCleanupTask{subsystem: d})
+	s.AddTask(int64(d.Options.IntervalSeconds), &deadJobCleanupTask{subsystem: d})
 	util.Infof("Started dead job cleanup plugin (retention=%dd, threshold=%d, batch_size=%d, interval=%ds)",
 		d.Options.RetentionDays, d.Options.Threshold, d.Options.BatchSize, d.Options.IntervalSeconds)
 	return nil
