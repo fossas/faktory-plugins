@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +17,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// testPort is an atomic counter used to assign a unique port to each runSystem call,
+// preventing "address already in use" errors on macOS where ports aren't released
+// fast enough between subtests.
+var testPort atomic.Int32
+
+func init() {
+	testPort.Store(7419)
+}
+
+func nextPort() int {
+	return int(testPort.Add(1))
+}
 
 const (
 	enabledConfig = `
@@ -64,10 +78,12 @@ func writeConfig(t *testing.T, configDir string, config string) {
 }
 
 func runSystem(configDir string, runner func(s *server.Server, cl *client.Client)) {
+	port := nextPort()
+	addr := fmt.Sprintf("localhost:%d", port)
 	dir := fmt.Sprintf("/tmp/deadjobs_test_%d.db", rand.Int())
 	defer os.RemoveAll(dir)
 	opts := &cli.CliOptions{
-		CmdBinding:       "localhost:7419",
+		CmdBinding:       addr,
 		Environment:      "development",
 		ConfigDirectory:  configDir,
 		LogLevel:         "debug",
@@ -97,7 +113,7 @@ func runSystem(configDir string, runner func(s *server.Server, cl *client.Client
 	client.RandomProcessWid = strconv.FormatInt(rand.Int63(), 32)
 
 	srv := client.DefaultServer()
-	srv.Address = "localhost:7419"
+	srv.Address = addr
 	cl, err := client.Dial(srv, "123456")
 	if err != nil {
 		panic(err)
