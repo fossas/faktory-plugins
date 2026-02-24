@@ -118,7 +118,13 @@ func addDeadJobs(t *testing.T, ctx context.Context, deadSet interface {
 	t.Helper()
 	for i := 0; i < n; i++ {
 		job := client.NewJob(jobType, i)
-		job.At = util.Thens(baseTime.Add(time.Duration(i) * time.Minute))
+		ts := util.Thens(baseTime.Add(time.Duration(i) * time.Minute))
+		job.At = ts
+		job.Failure = &client.Failure{
+			FailedAt:     ts,
+			ErrorMessage: "test failure",
+			ErrorType:    "TestError",
+		}
 		err := deadSet.Add(ctx, job)
 		require.NoError(t, err)
 	}

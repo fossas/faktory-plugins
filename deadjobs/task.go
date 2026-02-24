@@ -25,8 +25,13 @@ func (t *deadJobCleanupTask) Name() string {
 
 // Execute runs the cleanup task.
 func (t *deadJobCleanupTask) Execute(ctx context.Context) error {
-	t.sweeps++
 	opts := t.subsystem.loadOptions()
+
+	if !opts.Enabled {
+		return nil
+	}
+
+	t.sweeps++
 
 	deadSet := t.subsystem.Server.Store().Dead()
 	currentSize := deadSet.Size(ctx)
