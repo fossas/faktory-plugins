@@ -2,34 +2,24 @@ package deadjobs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"os"
 	"strconv"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/contribsys/faktory/cli"
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/server"
+	"github.com/contribsys/faktory/storage"
 	"github.com/contribsys/faktory/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// testPort is an atomic counter used to assign a unique port to each runSystem call,
-// preventing "address already in use" errors on macOS where ports aren't released
-// fast enough between subtests.
-var testPort atomic.Int32
-
-func init() {
-	testPort.Store(7419)
-}
-
-func nextPort() int {
-	return int(testPort.Add(1))
-}
+const testPort = "17419"
 
 const (
 	enabledConfig = `
@@ -77,13 +67,11 @@ func writeConfig(t *testing.T, configDir string, config string) {
 	require.NoError(t, err)
 }
 
-func runSystem(configDir string, runner func(s *server.Server, cl *client.Client)) {
-	port := nextPort()
-	addr := fmt.Sprintf("localhost:%d", port)
+func withServer(configDir string, runner func(s *server.Server, cl *client.Client)) {
 	dir := fmt.Sprintf("/tmp/deadjobs_test_%d.db", rand.Int())
 	defer os.RemoveAll(dir)
 	opts := &cli.CliOptions{
-		CmdBinding:       addr,
+		CmdBinding:       "localhost:" + testPort,
 		Environment:      "development",
 		ConfigDirectory:  configDir,
 		LogLevel:         "debug",
@@ -113,7 +101,7 @@ func runSystem(configDir string, runner func(s *server.Server, cl *client.Client
 	client.RandomProcessWid = strconv.FormatInt(rand.Int63(), 32)
 
 	srv := client.DefaultServer()
-	srv.Address = addr
+	srv.Address = "localhost:" + testPort
 	cl, err := client.Dial(srv, "123456")
 	if err != nil {
 		panic(err)
@@ -146,37 +134,60 @@ func addDeadJobs(t *testing.T, ctx context.Context, deadSet interface {
 	}
 }
 
-func TestSubsystemInterface(t *testing.T) {
-	t.Run("Name returns correct value", func(t *testing.T) {
-		system := new(DeadJobCleanupSubsystem)
-		assert.Equal(t, "dead_job_cleanup", system.Name())
+// collectJobTypes returns the job types of all entries in the sorted set.
+func collectJobTypes(t *testing.T, ctx context.Context, sset storage.SortedSet) []string {
+	t.Helper()
+	var types []string
+	_, err := sset.Page(ctx, 0, int(sset.Size(ctx)), func(idx int, e storage.SortedEntry) error {
+		var job client.Job
+		if err := json.Unmarshal(e.Value(), &job); err != nil {
+			return err
+		}
+		types = append(types, job.Type)
+		return nil
 	})
+	require.NoError(t, err)
+	return types
+}
 
-	t.Run("Shutdown returns nil", func(t *testing.T) {
-		system := new(DeadJobCleanupSubsystem)
-		configDir := createConfigDir(t)
-		runSystem(configDir, func(s *server.Server, cl *client.Client) {
+func TestSubsystemInterface(t *testing.T) {
+	configDir := createConfigDir(t)
+	writeConfig(t, configDir, enabledConfig)
+	withServer(configDir, func(s *server.Server, cl *client.Client) {
+		t.Run("Name returns correct value", func(t *testing.T) {
+			system := new(DeadJobCleanupSubsystem)
+			assert.Equal(t, "dead_job_cleanup", system.Name())
+		})
+
+		t.Run("Shutdown returns nil", func(t *testing.T) {
+			system := new(DeadJobCleanupSubsystem)
 			err := system.Start(s)
 			require.NoError(t, err)
 			err = system.Shutdown(s)
 			assert.NoError(t, err)
 		})
-	})
 
-	t.Run("Reload updates options", func(t *testing.T) {
-		system := new(DeadJobCleanupSubsystem)
-		configDir := createConfigDir(t)
-		writeConfig(t, configDir, enabledConfig)
-		runSystem(configDir, func(s *server.Server, cl *client.Client) {
+		t.Run("Reload updates options from config", func(t *testing.T) {
+			system := new(DeadJobCleanupSubsystem)
 			err := system.Start(s)
 			require.NoError(t, err)
 			assert.Equal(t, int64(7), system.loadOptions().RetentionDays)
+			assert.Equal(t, int64(5), system.loadOptions().Threshold)
 
-			// Reload should re-parse config (same values since file hasn't changed,
-			// but exercises the code path)
+			// Mutate GlobalConfig with different values and reload
+			s.Options.GlobalConfig["dead_job_cleanup"] = map[string]interface{}{
+				"enabled":          true,
+				"retention_days":   int64(30),
+				"threshold":        int64(50000),
+				"batch_size":       int64(5000),
+				"interval_seconds": int64(7200),
+			}
 			err = system.Reload(s)
-			assert.NoError(t, err)
-			assert.Equal(t, int64(7), system.loadOptions().RetentionDays)
+			require.NoError(t, err)
+			assert.Equal(t, int64(30), system.loadOptions().RetentionDays)
+			assert.Equal(t, int64(50000), system.loadOptions().Threshold)
+			assert.Equal(t, int64(5000), system.loadOptions().BatchSize)
+			assert.Equal(t, int64(7200), system.loadOptions().IntervalSeconds)
 		})
 	})
 }
@@ -211,7 +222,7 @@ func TestConfiguration(t *testing.T) {
 	t.Run("no configuration disables plugin", func(t *testing.T) {
 		system := new(DeadJobCleanupSubsystem)
 		configDir := createConfigDir(t)
-		runSystem(configDir, func(s *server.Server, cl *client.Client) {
+		withServer(configDir, func(s *server.Server, cl *client.Client) {
 			err := system.Start(s)
 			assert.NoError(t, err)
 			assert.False(t, system.loadOptions().Enabled)
@@ -222,7 +233,7 @@ func TestConfiguration(t *testing.T) {
 		system := new(DeadJobCleanupSubsystem)
 		configDir := createConfigDir(t)
 		writeConfig(t, configDir, disabledConfig)
-		runSystem(configDir, func(s *server.Server, cl *client.Client) {
+		withServer(configDir, func(s *server.Server, cl *client.Client) {
 			err := system.Start(s)
 			assert.NoError(t, err)
 			assert.False(t, system.loadOptions().Enabled)
@@ -233,7 +244,7 @@ func TestConfiguration(t *testing.T) {
 		system := new(DeadJobCleanupSubsystem)
 		configDir := createConfigDir(t)
 		writeConfig(t, configDir, enabledOnlyConfig)
-		runSystem(configDir, func(s *server.Server, cl *client.Client) {
+		withServer(configDir, func(s *server.Server, cl *client.Client) {
 			err := system.Start(s)
 			assert.NoError(t, err)
 			assert.True(t, system.loadOptions().Enabled)
@@ -248,7 +259,7 @@ func TestConfiguration(t *testing.T) {
 		system := new(DeadJobCleanupSubsystem)
 		configDir := createConfigDir(t)
 		writeConfig(t, configDir, enabledConfig)
-		runSystem(configDir, func(s *server.Server, cl *client.Client) {
+		withServer(configDir, func(s *server.Server, cl *client.Client) {
 			err := system.Start(s)
 			assert.NoError(t, err)
 			assert.True(t, system.loadOptions().Enabled)
@@ -263,7 +274,7 @@ func TestConfiguration(t *testing.T) {
 		system := new(DeadJobCleanupSubsystem)
 		configDir := createConfigDir(t)
 		writeConfig(t, configDir, customConfig)
-		runSystem(configDir, func(s *server.Server, cl *client.Client) {
+		withServer(configDir, func(s *server.Server, cl *client.Client) {
 			err := system.Start(s)
 			assert.NoError(t, err)
 			assert.True(t, system.loadOptions().Enabled)
@@ -283,7 +294,7 @@ func TestConfiguration(t *testing.T) {
 		system := new(DeadJobCleanupSubsystem)
 		configDir := createConfigDir(t)
 		writeConfig(t, configDir, zeroThresholdConfig)
-		runSystem(configDir, func(s *server.Server, cl *client.Client) {
+		withServer(configDir, func(s *server.Server, cl *client.Client) {
 			err := system.Start(s)
 			assert.NoError(t, err)
 			assert.Equal(t, int64(0), system.loadOptions().Threshold)
@@ -292,17 +303,19 @@ func TestConfiguration(t *testing.T) {
 }
 
 func TestCleanupExecution(t *testing.T) {
-	t.Run("skips when below threshold", func(t *testing.T) {
-		system := new(DeadJobCleanupSubsystem)
-		configDir := createConfigDir(t)
-		writeConfig(t, configDir, enabledConfig) // threshold = 5
-		runSystem(configDir, func(s *server.Server, cl *client.Client) {
+	configDir := createConfigDir(t)
+	writeConfig(t, configDir, enabledConfig) // threshold = 5, retention_days = 7, batch_size = 100
+	withServer(configDir, func(s *server.Server, cl *client.Client) {
+		t.Run("skips when below threshold", func(t *testing.T) {
+			system := new(DeadJobCleanupSubsystem)
 			system.Server = s
 			system.storeOptions(system.parseOptions(s))
 			ctx := context.Background()
+			deadSet := s.Store().Dead()
+			deadSet.Clear(ctx)
 
 			// Add 3 old dead jobs (below threshold of 5)
-			addDeadJobs(t, ctx, s.Store().Dead(), "OldJob", 3,
+			addDeadJobs(t, ctx, deadSet, "OldJob", 3,
 				time.Now().Add(-14*24*time.Hour))
 
 			task := &deadJobCleanupTask{subsystem: system}
@@ -311,61 +324,56 @@ func TestCleanupExecution(t *testing.T) {
 			assert.Equal(t, int64(1), task.sweeps)
 			assert.Equal(t, int64(0), task.totalRemoved)
 			// Jobs should still be there
-			assert.Equal(t, uint64(3), s.Store().Dead().Size(ctx))
+			assert.Equal(t, uint64(3), deadSet.Size(ctx))
+			deadSet.Clear(ctx)
 		})
-	})
 
-	t.Run("skips when exactly at threshold", func(t *testing.T) {
-		system := new(DeadJobCleanupSubsystem)
-		configDir := createConfigDir(t)
-		writeConfig(t, configDir, enabledConfig) // threshold = 5
-		runSystem(configDir, func(s *server.Server, cl *client.Client) {
+		t.Run("skips when exactly at threshold", func(t *testing.T) {
+			system := new(DeadJobCleanupSubsystem)
 			system.Server = s
 			system.storeOptions(system.parseOptions(s))
 			ctx := context.Background()
+			deadSet := s.Store().Dead()
+			deadSet.Clear(ctx)
 
 			// Add exactly 5 old dead jobs (== threshold, should NOT trigger cleanup)
-			addDeadJobs(t, ctx, s.Store().Dead(), "OldJob", 5,
+			addDeadJobs(t, ctx, deadSet, "OldJob", 5,
 				time.Now().Add(-14*24*time.Hour))
 
 			task := &deadJobCleanupTask{subsystem: system}
 			err := task.Execute(ctx)
 			assert.NoError(t, err)
 			assert.Equal(t, int64(0), task.totalRemoved)
-			assert.Equal(t, uint64(5), s.Store().Dead().Size(ctx))
+			assert.Equal(t, uint64(5), deadSet.Size(ctx))
+			deadSet.Clear(ctx)
 		})
-	})
 
-	t.Run("cleans when one above threshold", func(t *testing.T) {
-		system := new(DeadJobCleanupSubsystem)
-		configDir := createConfigDir(t)
-		writeConfig(t, configDir, enabledConfig) // threshold = 5
-		runSystem(configDir, func(s *server.Server, cl *client.Client) {
+		t.Run("cleans when one above threshold", func(t *testing.T) {
+			system := new(DeadJobCleanupSubsystem)
 			system.Server = s
 			system.storeOptions(system.parseOptions(s))
 			ctx := context.Background()
+			deadSet := s.Store().Dead()
+			deadSet.Clear(ctx)
 
 			// Add 6 old dead jobs (> threshold of 5)
-			addDeadJobs(t, ctx, s.Store().Dead(), "OldJob", 6,
+			addDeadJobs(t, ctx, deadSet, "OldJob", 6,
 				time.Now().Add(-14*24*time.Hour))
 
 			task := &deadJobCleanupTask{subsystem: system}
 			err := task.Execute(ctx)
 			assert.NoError(t, err)
 			assert.Equal(t, int64(6), task.totalRemoved)
-			assert.Equal(t, uint64(0), s.Store().Dead().Size(ctx))
+			assert.Equal(t, uint64(0), deadSet.Size(ctx))
 		})
-	})
 
-	t.Run("removes only old jobs, keeps recent ones", func(t *testing.T) {
-		system := new(DeadJobCleanupSubsystem)
-		configDir := createConfigDir(t)
-		writeConfig(t, configDir, enabledConfig) // retention_days = 7, threshold = 5
-		runSystem(configDir, func(s *server.Server, cl *client.Client) {
+		t.Run("removes only old jobs, keeps recent ones", func(t *testing.T) {
+			system := new(DeadJobCleanupSubsystem)
 			system.Server = s
 			system.storeOptions(system.parseOptions(s))
 			ctx := context.Background()
 			deadSet := s.Store().Dead()
+			deadSet.Clear(ctx)
 
 			// Add 10 old dead jobs (14 days ago, older than 7-day retention)
 			addDeadJobs(t, ctx, deadSet, "OldJob", 10,
@@ -382,71 +390,70 @@ func TestCleanupExecution(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, int64(10), task.totalRemoved)
 			assert.Equal(t, uint64(3), deadSet.Size(ctx))
-		})
-	})
 
-	t.Run("removes nothing when all jobs are recent despite exceeding threshold", func(t *testing.T) {
-		system := new(DeadJobCleanupSubsystem)
-		configDir := createConfigDir(t)
-		writeConfig(t, configDir, enabledConfig) // retention_days = 7, threshold = 5
-		runSystem(configDir, func(s *server.Server, cl *client.Client) {
+			// Verify the remaining jobs are all recent ones
+			types := collectJobTypes(t, ctx, deadSet)
+			for _, typ := range types {
+				assert.Equal(t, "RecentJob", typ)
+			}
+			deadSet.Clear(ctx)
+		})
+
+		t.Run("removes nothing when all jobs are recent despite exceeding threshold", func(t *testing.T) {
+			system := new(DeadJobCleanupSubsystem)
 			system.Server = s
 			system.storeOptions(system.parseOptions(s))
 			ctx := context.Background()
+			deadSet := s.Store().Dead()
+			deadSet.Clear(ctx)
 
 			// Add 10 recent dead jobs (all within retention period)
-			addDeadJobs(t, ctx, s.Store().Dead(), "RecentJob", 10,
+			addDeadJobs(t, ctx, deadSet, "RecentJob", 10,
 				time.Now().Add(-1*time.Hour))
 
-			assert.Equal(t, uint64(10), s.Store().Dead().Size(ctx))
+			assert.Equal(t, uint64(10), deadSet.Size(ctx))
 
 			task := &deadJobCleanupTask{subsystem: system}
 			err := task.Execute(ctx)
 			assert.NoError(t, err)
 			assert.Equal(t, int64(0), task.totalRemoved)
 			// All jobs should remain
-			assert.Equal(t, uint64(10), s.Store().Dead().Size(ctx))
+			assert.Equal(t, uint64(10), deadSet.Size(ctx))
+			deadSet.Clear(ctx)
 		})
-	})
 
-	t.Run("removes all jobs when all are old", func(t *testing.T) {
-		system := new(DeadJobCleanupSubsystem)
-		configDir := createConfigDir(t)
-		writeConfig(t, configDir, enabledConfig) // threshold = 5, batch_size = 100
-		runSystem(configDir, func(s *server.Server, cl *client.Client) {
+		t.Run("removes all jobs when all are old", func(t *testing.T) {
+			system := new(DeadJobCleanupSubsystem)
 			system.Server = s
 			system.storeOptions(system.parseOptions(s))
 			ctx := context.Background()
+			deadSet := s.Store().Dead()
+			deadSet.Clear(ctx)
 
 			// Add 10 old dead jobs
-			addDeadJobs(t, ctx, s.Store().Dead(), "OldJob", 10,
+			addDeadJobs(t, ctx, deadSet, "OldJob", 10,
 				time.Now().Add(-14*24*time.Hour))
 
 			task := &deadJobCleanupTask{subsystem: system}
 			err := task.Execute(ctx)
 			assert.NoError(t, err)
 			assert.Equal(t, int64(10), task.totalRemoved)
-			assert.Equal(t, uint64(0), s.Store().Dead().Size(ctx))
+			assert.Equal(t, uint64(0), deadSet.Size(ctx))
 		})
-	})
 
-	t.Run("threshold zero always cleans old jobs", func(t *testing.T) {
-		zeroThresholdConfig := `
-		[dead_job_cleanup]
-		enabled = true
-		retention_days = 7
-		threshold = 0
-		batch_size = 100
-		interval_seconds = 60
-		`
-		system := new(DeadJobCleanupSubsystem)
-		configDir := createConfigDir(t)
-		writeConfig(t, configDir, zeroThresholdConfig)
-		runSystem(configDir, func(s *server.Server, cl *client.Client) {
+		t.Run("threshold zero always cleans old jobs", func(t *testing.T) {
+			system := new(DeadJobCleanupSubsystem)
 			system.Server = s
-			system.storeOptions(system.parseOptions(s))
+			system.storeOptions(&Options{
+				Enabled:         true,
+				RetentionDays:   7,
+				Threshold:       0,
+				BatchSize:       100,
+				IntervalSeconds: 60,
+			})
 			ctx := context.Background()
 			deadSet := s.Store().Dead()
+			deadSet.Clear(ctx)
 
 			// Add just 1 old dead job (threshold is 0, so any count > 0 triggers)
 			addDeadJobs(t, ctx, deadSet, "OldJob", 1,
@@ -458,27 +465,23 @@ func TestCleanupExecution(t *testing.T) {
 			assert.Equal(t, int64(1), task.totalRemoved)
 			assert.Equal(t, uint64(0), deadSet.Size(ctx))
 		})
-	})
 
-	t.Run("respects batch size limit", func(t *testing.T) {
-		batchLimitConfig := `
-		[dead_job_cleanup]
-		enabled = true
-		retention_days = 7
-		threshold = 2
-		batch_size = 3
-		interval_seconds = 60
-		`
-		system := new(DeadJobCleanupSubsystem)
-		configDir := createConfigDir(t)
-		writeConfig(t, configDir, batchLimitConfig)
-		runSystem(configDir, func(s *server.Server, cl *client.Client) {
+		t.Run("respects batch size limit", func(t *testing.T) {
+			system := new(DeadJobCleanupSubsystem)
 			system.Server = s
-			system.storeOptions(system.parseOptions(s))
+			system.storeOptions(&Options{
+				Enabled:         true,
+				RetentionDays:   7,
+				Threshold:       2,
+				BatchSize:       3,
+				IntervalSeconds: 60,
+			})
 			ctx := context.Background()
+			deadSet := s.Store().Dead()
+			deadSet.Clear(ctx)
 
 			// Add 10 old dead jobs
-			addDeadJobs(t, ctx, s.Store().Dead(), "OldJob", 10,
+			addDeadJobs(t, ctx, deadSet, "OldJob", 10,
 				time.Now().Add(-14*24*time.Hour))
 
 			task := &deadJobCleanupTask{subsystem: system}
@@ -487,35 +490,32 @@ func TestCleanupExecution(t *testing.T) {
 			err := task.Execute(ctx)
 			assert.NoError(t, err)
 			assert.Equal(t, int64(3), task.totalRemoved)
-			assert.Equal(t, uint64(7), s.Store().Dead().Size(ctx))
+			assert.Equal(t, uint64(7), deadSet.Size(ctx))
 
 			// Second sweep: should remove another 3
 			err = task.Execute(ctx)
 			assert.NoError(t, err)
 			assert.Equal(t, int64(6), task.totalRemoved)
-			assert.Equal(t, uint64(4), s.Store().Dead().Size(ctx))
+			assert.Equal(t, uint64(4), deadSet.Size(ctx))
+			deadSet.Clear(ctx)
 		})
-	})
 
-	t.Run("multiple sweeps drain the set completely", func(t *testing.T) {
-		batchLimitConfig := `
-		[dead_job_cleanup]
-		enabled = true
-		retention_days = 7
-		threshold = 0
-		batch_size = 4
-		interval_seconds = 60
-		`
-		system := new(DeadJobCleanupSubsystem)
-		configDir := createConfigDir(t)
-		writeConfig(t, configDir, batchLimitConfig)
-		runSystem(configDir, func(s *server.Server, cl *client.Client) {
+		t.Run("multiple sweeps drain the set completely", func(t *testing.T) {
+			system := new(DeadJobCleanupSubsystem)
 			system.Server = s
-			system.storeOptions(system.parseOptions(s))
+			system.storeOptions(&Options{
+				Enabled:         true,
+				RetentionDays:   7,
+				Threshold:       0,
+				BatchSize:       4,
+				IntervalSeconds: 60,
+			})
 			ctx := context.Background()
+			deadSet := s.Store().Dead()
+			deadSet.Clear(ctx)
 
 			// Add 10 old dead jobs
-			addDeadJobs(t, ctx, s.Store().Dead(), "OldJob", 10,
+			addDeadJobs(t, ctx, deadSet, "OldJob", 10,
 				time.Now().Add(-14*24*time.Hour))
 
 			task := &deadJobCleanupTask{subsystem: system}
@@ -527,26 +527,23 @@ func TestCleanupExecution(t *testing.T) {
 			}
 
 			assert.Equal(t, int64(10), task.totalRemoved)
-			assert.Equal(t, uint64(0), s.Store().Dead().Size(ctx))
+			assert.Equal(t, uint64(0), deadSet.Size(ctx))
 			assert.Equal(t, int64(5), task.sweeps)
 		})
-	})
 
-	t.Run("empty dead set with zero threshold is no-op", func(t *testing.T) {
-		zeroThresholdConfig := `
-		[dead_job_cleanup]
-		enabled = true
-		threshold = 0
-		batch_size = 100
-		interval_seconds = 60
-		`
-		system := new(DeadJobCleanupSubsystem)
-		configDir := createConfigDir(t)
-		writeConfig(t, configDir, zeroThresholdConfig)
-		runSystem(configDir, func(s *server.Server, cl *client.Client) {
+		t.Run("empty dead set with zero threshold is no-op", func(t *testing.T) {
+			system := new(DeadJobCleanupSubsystem)
 			system.Server = s
-			system.storeOptions(system.parseOptions(s))
+			system.storeOptions(&Options{
+				Enabled:         true,
+				RetentionDays:   7,
+				Threshold:       0,
+				BatchSize:       100,
+				IntervalSeconds: 60,
+			})
 			ctx := context.Background()
+			deadSet := s.Store().Dead()
+			deadSet.Clear(ctx)
 
 			// Empty dead set, threshold 0 -> 0 <= 0, should skip
 			task := &deadJobCleanupTask{subsystem: system}
