@@ -67,7 +67,7 @@ func runSystem(configDir string, runner func(s *server.Server, cl *client.Client
 	dir := fmt.Sprintf("/tmp/deadjobs_test_%d.db", rand.Int())
 	defer os.RemoveAll(dir)
 	opts := &cli.CliOptions{
-		CmdBinding:       "localhost:7418",
+		CmdBinding:       "localhost:7419",
 		Environment:      "development",
 		ConfigDirectory:  configDir,
 		LogLevel:         "debug",
@@ -97,7 +97,7 @@ func runSystem(configDir string, runner func(s *server.Server, cl *client.Client
 	client.RandomProcessWid = strconv.FormatInt(rand.Int63(), 32)
 
 	srv := client.DefaultServer()
-	srv.Address = "localhost:7418"
+	srv.Address = "localhost:7419"
 	cl, err := client.Dial(srv, "123456")
 	if err != nil {
 		panic(err)
