@@ -46,7 +46,7 @@ type Options struct {
 // Start initializes the subsystem and registers the periodic cleanup task.
 func (d *DeadJobCleanupSubsystem) Start(s *server.Server) error {
 	d.Server = s
-	opts := d.parseOptions(s)
+	opts := d.parseOptions()
 	d.storeOptions(opts)
 
 	if !opts.Enabled {
@@ -66,7 +66,7 @@ func (d *DeadJobCleanupSubsystem) Name() string {
 
 // Reload reloads configuration. Hot reload updates options atomically.
 func (d *DeadJobCleanupSubsystem) Reload(s *server.Server) error {
-	d.storeOptions(d.parseOptions(s))
+	d.storeOptions(d.parseOptions())
 	return nil
 }
 
@@ -75,7 +75,7 @@ func (d *DeadJobCleanupSubsystem) Shutdown(s *server.Server) error {
 	return nil
 }
 
-func (d *DeadJobCleanupSubsystem) parseOptions(s *server.Server) *Options {
+func (d *DeadJobCleanupSubsystem) parseOptions() *Options {
 	opts := &Options{
 		RetentionDays:   7,
 		Threshold:       10000,
@@ -83,30 +83,30 @@ func (d *DeadJobCleanupSubsystem) parseOptions(s *server.Server) *Options {
 		IntervalSeconds: 3600,
 	}
 
-	enabledValue := s.Options.Config("dead_job_cleanup", "enabled", false)
+	enabledValue := d.Server.Options.Config("dead_job_cleanup", "enabled", false)
 	if enabled, ok := enabledValue.(bool); ok {
 		opts.Enabled = enabled
 	}
 
-	if v := s.Options.Config("dead_job_cleanup", "retention_days", int64(7)); v != nil {
+	if v := d.Server.Options.Config("dead_job_cleanup", "retention_days", int64(7)); v != nil {
 		if val, ok := v.(int64); ok && val > 0 {
 			opts.RetentionDays = val
 		}
 	}
 
-	if v := s.Options.Config("dead_job_cleanup", "threshold", int64(10000)); v != nil {
+	if v := d.Server.Options.Config("dead_job_cleanup", "threshold", int64(10000)); v != nil {
 		if val, ok := v.(int64); ok && val >= 0 {
 			opts.Threshold = val
 		}
 	}
 
-	if v := s.Options.Config("dead_job_cleanup", "batch_size", int64(1000)); v != nil {
+	if v := d.Server.Options.Config("dead_job_cleanup", "batch_size", int64(1000)); v != nil {
 		if val, ok := v.(int64); ok && val > 0 {
 			opts.BatchSize = val
 		}
 	}
 
-	if v := s.Options.Config("dead_job_cleanup", "interval_seconds", int64(3600)); v != nil {
+	if v := d.Server.Options.Config("dead_job_cleanup", "interval_seconds", int64(3600)); v != nil {
 		if val, ok := v.(int64); ok && val > 0 {
 			opts.IntervalSeconds = val
 		}

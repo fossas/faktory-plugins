@@ -309,7 +309,7 @@ func TestCleanupExecution(t *testing.T) {
 		t.Run("skips when below threshold", func(t *testing.T) {
 			system := new(DeadJobCleanupSubsystem)
 			system.Server = s
-			system.storeOptions(system.parseOptions(s))
+			system.storeOptions(system.parseOptions())
 			ctx := context.Background()
 			deadSet := s.Store().Dead()
 			deadSet.Clear(ctx)
@@ -331,7 +331,7 @@ func TestCleanupExecution(t *testing.T) {
 		t.Run("skips when exactly at threshold", func(t *testing.T) {
 			system := new(DeadJobCleanupSubsystem)
 			system.Server = s
-			system.storeOptions(system.parseOptions(s))
+			system.storeOptions(system.parseOptions())
 			ctx := context.Background()
 			deadSet := s.Store().Dead()
 			deadSet.Clear(ctx)
@@ -351,7 +351,7 @@ func TestCleanupExecution(t *testing.T) {
 		t.Run("cleans when one above threshold", func(t *testing.T) {
 			system := new(DeadJobCleanupSubsystem)
 			system.Server = s
-			system.storeOptions(system.parseOptions(s))
+			system.storeOptions(system.parseOptions())
 			ctx := context.Background()
 			deadSet := s.Store().Dead()
 			deadSet.Clear(ctx)
@@ -370,7 +370,7 @@ func TestCleanupExecution(t *testing.T) {
 		t.Run("removes only old jobs, keeps recent ones", func(t *testing.T) {
 			system := new(DeadJobCleanupSubsystem)
 			system.Server = s
-			system.storeOptions(system.parseOptions(s))
+			system.storeOptions(system.parseOptions())
 			ctx := context.Background()
 			deadSet := s.Store().Dead()
 			deadSet.Clear(ctx)
@@ -402,7 +402,7 @@ func TestCleanupExecution(t *testing.T) {
 		t.Run("removes nothing when all jobs are recent despite exceeding threshold", func(t *testing.T) {
 			system := new(DeadJobCleanupSubsystem)
 			system.Server = s
-			system.storeOptions(system.parseOptions(s))
+			system.storeOptions(system.parseOptions())
 			ctx := context.Background()
 			deadSet := s.Store().Dead()
 			deadSet.Clear(ctx)
@@ -425,7 +425,7 @@ func TestCleanupExecution(t *testing.T) {
 		t.Run("removes all jobs when all are old", func(t *testing.T) {
 			system := new(DeadJobCleanupSubsystem)
 			system.Server = s
-			system.storeOptions(system.parseOptions(s))
+			system.storeOptions(system.parseOptions())
 			ctx := context.Background()
 			deadSet := s.Store().Dead()
 			deadSet.Clear(ctx)
