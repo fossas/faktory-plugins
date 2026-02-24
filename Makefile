@@ -10,6 +10,7 @@ test-docker:
 
 # Build the Faktory binary
 build:
+	mkdir -p bin
 	go build -o bin/faktory ./cmd/faktory
 
 clean:

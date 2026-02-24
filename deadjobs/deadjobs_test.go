@@ -51,7 +51,8 @@ const (
 func createConfigDir(t *testing.T) string {
 	t.Helper()
 	tmpDir := t.TempDir()
-	os.Mkdir(fmt.Sprintf("%s/conf.d", tmpDir), os.FileMode(0777))
+	err := os.Mkdir(fmt.Sprintf("%s/conf.d", tmpDir), os.FileMode(0777))
+	require.NoError(t, err)
 	return tmpDir
 }
 
@@ -147,13 +148,13 @@ func TestSubsystemInterface(t *testing.T) {
 		runSystem(configDir, func(s *server.Server, cl *client.Client) {
 			err := system.Start(s)
 			require.NoError(t, err)
-			assert.Equal(t, 7, system.Options.RetentionDays)
+			assert.Equal(t, int64(7), system.loadOptions().RetentionDays)
 
 			// Reload should re-parse config (same values since file hasn't changed,
 			// but exercises the code path)
 			err = system.Reload(s)
 			assert.NoError(t, err)
-			assert.Equal(t, 7, system.Options.RetentionDays)
+			assert.Equal(t, int64(7), system.loadOptions().RetentionDays)
 		})
 	})
 }
@@ -191,7 +192,7 @@ func TestConfiguration(t *testing.T) {
 		runSystem(configDir, func(s *server.Server, cl *client.Client) {
 			err := system.Start(s)
 			assert.NoError(t, err)
-			assert.False(t, system.Options.Enabled)
+			assert.False(t, system.loadOptions().Enabled)
 		})
 	})
 
@@ -202,7 +203,7 @@ func TestConfiguration(t *testing.T) {
 		runSystem(configDir, func(s *server.Server, cl *client.Client) {
 			err := system.Start(s)
 			assert.NoError(t, err)
-			assert.False(t, system.Options.Enabled)
+			assert.False(t, system.loadOptions().Enabled)
 		})
 	})
 
@@ -213,11 +214,11 @@ func TestConfiguration(t *testing.T) {
 		runSystem(configDir, func(s *server.Server, cl *client.Client) {
 			err := system.Start(s)
 			assert.NoError(t, err)
-			assert.True(t, system.Options.Enabled)
-			assert.Equal(t, 7, system.Options.RetentionDays)
-			assert.Equal(t, 10000, system.Options.Threshold)
-			assert.Equal(t, 1000, system.Options.BatchSize)
-			assert.Equal(t, 3600, system.Options.IntervalSeconds)
+			assert.True(t, system.loadOptions().Enabled)
+			assert.Equal(t, int64(7), system.loadOptions().RetentionDays)
+			assert.Equal(t, int64(10000), system.loadOptions().Threshold)
+			assert.Equal(t, int64(1000), system.loadOptions().BatchSize)
+			assert.Equal(t, int64(3600), system.loadOptions().IntervalSeconds)
 		})
 	})
 
@@ -228,11 +229,11 @@ func TestConfiguration(t *testing.T) {
 		runSystem(configDir, func(s *server.Server, cl *client.Client) {
 			err := system.Start(s)
 			assert.NoError(t, err)
-			assert.True(t, system.Options.Enabled)
-			assert.Equal(t, 7, system.Options.RetentionDays)
-			assert.Equal(t, 5, system.Options.Threshold)
-			assert.Equal(t, 100, system.Options.BatchSize)
-			assert.Equal(t, 60, system.Options.IntervalSeconds)
+			assert.True(t, system.loadOptions().Enabled)
+			assert.Equal(t, int64(7), system.loadOptions().RetentionDays)
+			assert.Equal(t, int64(5), system.loadOptions().Threshold)
+			assert.Equal(t, int64(100), system.loadOptions().BatchSize)
+			assert.Equal(t, int64(60), system.loadOptions().IntervalSeconds)
 		})
 	})
 
@@ -243,11 +244,11 @@ func TestConfiguration(t *testing.T) {
 		runSystem(configDir, func(s *server.Server, cl *client.Client) {
 			err := system.Start(s)
 			assert.NoError(t, err)
-			assert.True(t, system.Options.Enabled)
-			assert.Equal(t, 30, system.Options.RetentionDays)
-			assert.Equal(t, 50000, system.Options.Threshold)
-			assert.Equal(t, 5000, system.Options.BatchSize)
-			assert.Equal(t, 7200, system.Options.IntervalSeconds)
+			assert.True(t, system.loadOptions().Enabled)
+			assert.Equal(t, int64(30), system.loadOptions().RetentionDays)
+			assert.Equal(t, int64(50000), system.loadOptions().Threshold)
+			assert.Equal(t, int64(5000), system.loadOptions().BatchSize)
+			assert.Equal(t, int64(7200), system.loadOptions().IntervalSeconds)
 		})
 	})
 
@@ -263,7 +264,7 @@ func TestConfiguration(t *testing.T) {
 		runSystem(configDir, func(s *server.Server, cl *client.Client) {
 			err := system.Start(s)
 			assert.NoError(t, err)
-			assert.Equal(t, 0, system.Options.Threshold)
+			assert.Equal(t, int64(0), system.loadOptions().Threshold)
 		})
 	})
 }
@@ -275,7 +276,7 @@ func TestCleanupExecution(t *testing.T) {
 		writeConfig(t, configDir, enabledConfig) // threshold = 5
 		runSystem(configDir, func(s *server.Server, cl *client.Client) {
 			system.Server = s
-			system.Options = system.getOptions(s)
+			system.storeOptions(system.parseOptions(s))
 			ctx := context.Background()
 
 			// Add 3 old dead jobs (below threshold of 5)
@@ -298,7 +299,7 @@ func TestCleanupExecution(t *testing.T) {
 		writeConfig(t, configDir, enabledConfig) // threshold = 5
 		runSystem(configDir, func(s *server.Server, cl *client.Client) {
 			system.Server = s
-			system.Options = system.getOptions(s)
+			system.storeOptions(system.parseOptions(s))
 			ctx := context.Background()
 
 			// Add exactly 5 old dead jobs (== threshold, should NOT trigger cleanup)
@@ -319,7 +320,7 @@ func TestCleanupExecution(t *testing.T) {
 		writeConfig(t, configDir, enabledConfig) // threshold = 5
 		runSystem(configDir, func(s *server.Server, cl *client.Client) {
 			system.Server = s
-			system.Options = system.getOptions(s)
+			system.storeOptions(system.parseOptions(s))
 			ctx := context.Background()
 
 			// Add 6 old dead jobs (> threshold of 5)
@@ -340,7 +341,7 @@ func TestCleanupExecution(t *testing.T) {
 		writeConfig(t, configDir, enabledConfig) // retention_days = 7, threshold = 5
 		runSystem(configDir, func(s *server.Server, cl *client.Client) {
 			system.Server = s
-			system.Options = system.getOptions(s)
+			system.storeOptions(system.parseOptions(s))
 			ctx := context.Background()
 			deadSet := s.Store().Dead()
 
@@ -368,7 +369,7 @@ func TestCleanupExecution(t *testing.T) {
 		writeConfig(t, configDir, enabledConfig) // retention_days = 7, threshold = 5
 		runSystem(configDir, func(s *server.Server, cl *client.Client) {
 			system.Server = s
-			system.Options = system.getOptions(s)
+			system.storeOptions(system.parseOptions(s))
 			ctx := context.Background()
 
 			// Add 10 recent dead jobs (all within retention period)
@@ -392,7 +393,7 @@ func TestCleanupExecution(t *testing.T) {
 		writeConfig(t, configDir, enabledConfig) // threshold = 5, batch_size = 100
 		runSystem(configDir, func(s *server.Server, cl *client.Client) {
 			system.Server = s
-			system.Options = system.getOptions(s)
+			system.storeOptions(system.parseOptions(s))
 			ctx := context.Background()
 
 			// Add 10 old dead jobs
@@ -421,7 +422,7 @@ func TestCleanupExecution(t *testing.T) {
 		writeConfig(t, configDir, zeroThresholdConfig)
 		runSystem(configDir, func(s *server.Server, cl *client.Client) {
 			system.Server = s
-			system.Options = system.getOptions(s)
+			system.storeOptions(system.parseOptions(s))
 			ctx := context.Background()
 			deadSet := s.Store().Dead()
 
@@ -451,7 +452,7 @@ func TestCleanupExecution(t *testing.T) {
 		writeConfig(t, configDir, batchLimitConfig)
 		runSystem(configDir, func(s *server.Server, cl *client.Client) {
 			system.Server = s
-			system.Options = system.getOptions(s)
+			system.storeOptions(system.parseOptions(s))
 			ctx := context.Background()
 
 			// Add 10 old dead jobs
@@ -488,7 +489,7 @@ func TestCleanupExecution(t *testing.T) {
 		writeConfig(t, configDir, batchLimitConfig)
 		runSystem(configDir, func(s *server.Server, cl *client.Client) {
 			system.Server = s
-			system.Options = system.getOptions(s)
+			system.storeOptions(system.parseOptions(s))
 			ctx := context.Background()
 
 			// Add 10 old dead jobs
@@ -522,7 +523,7 @@ func TestCleanupExecution(t *testing.T) {
 		writeConfig(t, configDir, zeroThresholdConfig)
 		runSystem(configDir, func(s *server.Server, cl *client.Client) {
 			system.Server = s
-			system.Options = system.getOptions(s)
+			system.storeOptions(system.parseOptions(s))
 			ctx := context.Background()
 
 			// Empty dead set, threshold 0 -> 0 <= 0, should skip

@@ -26,7 +26,7 @@ func (t *deadJobCleanupTask) Name() string {
 // Execute runs the cleanup task.
 func (t *deadJobCleanupTask) Execute(ctx context.Context) error {
 	t.sweeps++
-	opts := t.subsystem.Options
+	opts := t.subsystem.loadOptions()
 
 	deadSet := t.subsystem.Server.Store().Dead()
 	currentSize := deadSet.Size(ctx)
@@ -40,7 +40,7 @@ func (t *deadJobCleanupTask) Execute(ctx context.Context) error {
 	cutoff := time.Now().Add(-time.Duration(opts.RetentionDays) * 24 * time.Hour)
 	cutoffStr := util.Thens(cutoff)
 
-	removed, err := deadSet.RemoveBefore(ctx, cutoffStr, int64(opts.BatchSize), func(data []byte) error {
+	removed, err := deadSet.RemoveBefore(ctx, cutoffStr, opts.BatchSize, func(data []byte) error {
 		return nil
 	})
 	if err != nil {
