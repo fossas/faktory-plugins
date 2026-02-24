@@ -10,6 +10,7 @@ import (
 	"github.com/contribsys/faktory/webui"
 	"github.com/fossas/faktory-plugins/batch"
 	"github.com/fossas/faktory-plugins/cron"
+	"github.com/fossas/faktory-plugins/deadjobs"
 	"github.com/fossas/faktory-plugins/expire"
 	"github.com/fossas/faktory-plugins/metrics"
 	"github.com/fossas/faktory-plugins/requeue"
@@ -57,6 +58,7 @@ func main() {
 	s.Register(new(cron.CronSubsystem))
 	s.Register(new(expire.ExpireSubsystem))
 	s.Register(new(requeue.RequeueSubsystem))
+	s.Register(new(deadjobs.DeadJobCleanupSubsystem))
 
 	go cli.HandleSignals(s)
 	go func() {
