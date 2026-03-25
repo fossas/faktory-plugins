@@ -52,7 +52,8 @@ func (r *RequeueSubsystem) requeueCommand(c *server.Connection, s *server.Server
 		_ = c.Error(cmd, fmt.Errorf("invalid REQUEUE %s", data))
 		return
 	}
-	job, err := s.Manager().Acknowledge(c.Context, jid)
+	requeueCtx := context.WithValue(c.Context, RequeueContextKey, true)
+	job, err := s.Manager().Acknowledge(requeueCtx, jid)
 	if err != nil {
 		_ = c.Error(cmd, err)
 		return
@@ -64,7 +65,7 @@ func (r *RequeueSubsystem) requeueCommand(c *server.Connection, s *server.Server
 		return
 	}
 
-	q, err := s.Store().GetQueue(c.Context, job.Queue)
+	q, err := s.Store().GetQueue(requeueCtx, job.Queue)
 	if err != nil {
 		_ = c.Error(cmd, err)
 		return
@@ -76,7 +77,7 @@ func (r *RequeueSubsystem) requeueCommand(c *server.Connection, s *server.Server
 	// https://github.com/contribsys/faktory/blob/v1.8.0/manager/manager.go#L222-L236
 	// https://github.com/contribsys/faktory/blob/v1.8.0/manager/manager.go#L251-L255
 	// https://github.com/contribsys/faktory/blob/v1.8.0/storage/queue_redis.go#L104
-	ctxh := context.WithValue(c.Context, manager.MiddlewareHelperKey, Ctx{job, s.Manager(), nil})
+	ctxh := context.WithValue(requeueCtx, manager.MiddlewareHelperKey, Ctx{job, s.Manager(), nil})
 	err = callMiddleware(ctxh, pushChain, func() error {
 		job.EnqueuedAt = util.Nows()
 		jdata, err := json.Marshal(job)

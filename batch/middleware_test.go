@@ -9,6 +9,7 @@ import (
 
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/server"
+	"github.com/fossas/faktory-plugins/requeue"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -443,4 +444,199 @@ func TestFailMiddleware(t *testing.T) {
 			assert.Equal(t, int64(0), status.Failed, "failed should be 0 on non-first non-terminal failure")
 		})
 	})
+}
+
+func TestRequeueDoesNotAffectBatchCounters(t *testing.T) {
+	withServerConfig(true, func(s *server.Server, cl *client.Client) {
+		// Create batch with a complete callback
+		result, err := cl.Generic(`BATCH NEW {"complete":{"jobtype":"CompleteCallback","queue":"callbacks"}}`)
+		require.NoError(t, err)
+		bid := string(result)
+
+		// Push two jobs
+		job1 := client.NewJob("TestJob", 1)
+		job1.SetCustom("bid", bid)
+		err = cl.Push(job1)
+		require.NoError(t, err)
+
+		job2 := client.NewJob("TestJob", 2)
+		job2.SetCustom("bid", bid)
+		err = cl.Push(job2)
+		require.NoError(t, err)
+
+		// Commit batch
+		_, err = cl.Generic("BATCH COMMIT " + bid)
+		require.NoError(t, err)
+
+		// Fetch job1 and REQUEUE it
+		fetched, err := cl.Fetch("default")
+		require.NoError(t, err)
+		require.NotNil(t, fetched)
+		assert.Equal(t, job1.Jid, fetched.Jid)
+
+		_, err = cl.Generic(fmt.Sprintf(`REQUEUE {"jid":%q}`, fetched.Jid))
+		require.NoError(t, err)
+
+		// Check counters: REQUEUE should not change total or pending
+		statusResult, err := cl.Generic("BATCH STATUS " + bid)
+		require.NoError(t, err)
+
+		var status client.BatchStatus
+		err = json.Unmarshal([]byte(statusResult), &status)
+		require.NoError(t, err)
+
+		assert.Equal(t, int64(2), status.Total, "total should remain 2 after REQUEUE")
+		assert.Equal(t, int64(2), status.Pending, "pending should remain 2 after REQUEUE")
+		assert.Equal(t, int64(0), status.Failed, "failed should remain 0 after REQUEUE")
+	}, new(requeue.RequeueSubsystem))
+}
+
+func TestRequeueLastPendingJobDoesNotFireCallbacks(t *testing.T) {
+	withServerConfig(true, func(s *server.Server, cl *client.Client) {
+		// Create batch with a single job
+		result, err := cl.Generic(`BATCH NEW {"complete":{"jobtype":"CompleteCallback","queue":"callbacks"}}`)
+		require.NoError(t, err)
+		bid := string(result)
+
+		job := client.NewJob("TestJob", 1)
+		job.SetCustom("bid", bid)
+		err = cl.Push(job)
+		require.NoError(t, err)
+
+		_, err = cl.Generic("BATCH COMMIT " + bid)
+		require.NoError(t, err)
+
+		// Fetch and REQUEUE the only job
+		fetched, err := cl.Fetch("default")
+		require.NoError(t, err)
+		require.NotNil(t, fetched)
+
+		_, err = cl.Generic(fmt.Sprintf(`REQUEUE {"jid":%q}`, fetched.Jid))
+		require.NoError(t, err)
+
+		// Callback should NOT have fired
+		callback, err := cl.Fetch("callbacks")
+		require.NoError(t, err)
+		assert.Nil(t, callback, "complete callback should not fire after REQUEUE")
+
+		// pending should still be 1
+		statusResult, err := cl.Generic("BATCH STATUS " + bid)
+		require.NoError(t, err)
+
+		var status client.BatchStatus
+		err = json.Unmarshal([]byte(statusResult), &status)
+		require.NoError(t, err)
+
+		assert.Equal(t, int64(1), status.Pending, "pending should still be 1")
+	}, new(requeue.RequeueSubsystem))
+}
+
+func TestRequeueThenAckCompletesBatch(t *testing.T) {
+	withServerConfig(true, func(s *server.Server, cl *client.Client) {
+		// Create batch with a single job
+		result, err := cl.Generic(`BATCH NEW {"complete":{"jobtype":"CompleteCallback","queue":"callbacks"}}`)
+		require.NoError(t, err)
+		bid := string(result)
+
+		job := client.NewJob("TestJob", 1)
+		job.SetCustom("bid", bid)
+		err = cl.Push(job)
+		require.NoError(t, err)
+
+		_, err = cl.Generic("BATCH COMMIT " + bid)
+		require.NoError(t, err)
+
+		// Fetch and REQUEUE
+		fetched, err := cl.Fetch("default")
+		require.NoError(t, err)
+		require.NotNil(t, fetched)
+
+		_, err = cl.Generic(fmt.Sprintf(`REQUEUE {"jid":%q}`, fetched.Jid))
+		require.NoError(t, err)
+
+		// Fetch the requeued job and ACK it
+		fetched2, err := cl.Fetch("default")
+		require.NoError(t, err)
+		require.NotNil(t, fetched2)
+		assert.Equal(t, job.Jid, fetched2.Jid)
+
+		err = cl.Ack(fetched2.Jid)
+		require.NoError(t, err)
+
+		// Allow time for the async callback check
+		time.Sleep(100 * time.Millisecond)
+
+		// Callback SHOULD fire now
+		callback, err := cl.Fetch("callbacks")
+		require.NoError(t, err)
+		require.NotNil(t, callback, "complete callback should fire after REQUEUE then ACK")
+		assert.Equal(t, "CompleteCallback", callback.Type)
+
+		// Counters should be correct
+		statusResult, err := cl.Generic("BATCH STATUS " + bid)
+		require.NoError(t, err)
+
+		var status client.BatchStatus
+		err = json.Unmarshal([]byte(statusResult), &status)
+		require.NoError(t, err)
+
+		assert.Equal(t, int64(1), status.Total, "total should be 1")
+		assert.Equal(t, int64(0), status.Pending, "pending should be 0 after ACK")
+		assert.Equal(t, int64(0), status.Failed, "failed should be 0")
+	}, new(requeue.RequeueSubsystem))
+}
+
+func TestRequeueMultipleTimesCountersCorrect(t *testing.T) {
+	withServerConfig(true, func(s *server.Server, cl *client.Client) {
+		// Create batch
+		result, err := cl.Generic(`BATCH NEW {"complete":{"jobtype":"CompleteCallback","queue":"callbacks"}}`)
+		require.NoError(t, err)
+		bid := string(result)
+
+		job := client.NewJob("TestJob", 1)
+		job.SetCustom("bid", bid)
+		err = cl.Push(job)
+		require.NoError(t, err)
+
+		_, err = cl.Generic("BATCH COMMIT " + bid)
+		require.NoError(t, err)
+
+		// REQUEUE 3 times
+		for i := 0; i < 3; i++ {
+			fetched, err := cl.Fetch("default")
+			require.NoError(t, err)
+			require.NotNil(t, fetched)
+
+			_, err = cl.Generic(fmt.Sprintf(`REQUEUE {"jid":%q}`, fetched.Jid))
+			require.NoError(t, err)
+		}
+
+		// Counters should be unchanged after 3 requeues
+		statusResult, err := cl.Generic("BATCH STATUS " + bid)
+		require.NoError(t, err)
+
+		var status client.BatchStatus
+		err = json.Unmarshal([]byte(statusResult), &status)
+		require.NoError(t, err)
+
+		assert.Equal(t, int64(1), status.Total, "total should still be 1 after 3 requeues")
+		assert.Equal(t, int64(1), status.Pending, "pending should still be 1 after 3 requeues")
+
+		// Now ACK it
+		fetched, err := cl.Fetch("default")
+		require.NoError(t, err)
+		require.NotNil(t, fetched)
+		err = cl.Ack(fetched.Jid)
+		require.NoError(t, err)
+
+		time.Sleep(100 * time.Millisecond)
+
+		statusResult, err = cl.Generic("BATCH STATUS " + bid)
+		require.NoError(t, err)
+		err = json.Unmarshal([]byte(statusResult), &status)
+		require.NoError(t, err)
+
+		assert.Equal(t, int64(1), status.Total, "total should be 1 after final ACK")
+		assert.Equal(t, int64(0), status.Pending, "pending should be 0 after final ACK")
+	}, new(requeue.RequeueSubsystem))
 }
