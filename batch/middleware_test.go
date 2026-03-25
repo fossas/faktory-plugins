@@ -563,9 +563,6 @@ func TestRequeueThenAckCompletesBatch(t *testing.T) {
 		err = cl.Ack(fetched2.Jid)
 		require.NoError(t, err)
 
-		// Allow time for the async callback check
-		time.Sleep(100 * time.Millisecond)
-
 		// Callback SHOULD fire now
 		callback, err := cl.Fetch("callbacks")
 		require.NoError(t, err)
@@ -628,8 +625,6 @@ func TestRequeueMultipleTimesCountersCorrect(t *testing.T) {
 		require.NotNil(t, fetched)
 		err = cl.Ack(fetched.Jid)
 		require.NoError(t, err)
-
-		time.Sleep(100 * time.Millisecond)
 
 		statusResult, err = cl.Generic("BATCH STATUS " + bid)
 		require.NoError(t, err)
