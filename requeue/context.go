@@ -1,9 +1,23 @@
 package requeue
 
 import (
+	"context"
+
 	"github.com/contribsys/faktory/client"
 	"github.com/contribsys/faktory/manager"
 )
+
+type contextKey string
+
+// RequeueContextKey is set on the context during a REQUEUE operation.
+// Other middleware (e.g. batch) can check for this to skip accounting
+// that should not apply when a job is being requeued rather than completed.
+const RequeueContextKey contextKey = "requeue"
+
+// IsRequeue returns true if the context indicates a REQUEUE operation is in progress.
+func IsRequeue(ctx context.Context) bool {
+	return ctx.Value(RequeueContextKey) != nil
+}
 
 var _ manager.Context = &Ctx{}
 

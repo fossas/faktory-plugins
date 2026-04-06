@@ -18,8 +18,9 @@ func withServer(runner func(s *server.Server, cl *client.Client)) {
 	withServerConfig(true, runner)
 }
 
-// withServerConfig creates a test server with configurable batch subsystem state
-func withServerConfig(batchEnabled bool, runner func(s *server.Server, cl *client.Client)) {
+// withServerConfig creates a test server with configurable batch subsystem state.
+// Additional subsystems can be registered via the variadic parameter.
+func withServerConfig(batchEnabled bool, runner func(s *server.Server, cl *client.Client), subsystems ...server.Subsystem) {
 	dir := fmt.Sprintf("/tmp/batch_test_%d.db", rand.Int())
 	defer os.RemoveAll(dir)
 
@@ -57,6 +58,9 @@ enabled = %t
 		panic(err)
 	}
 	s.Register(new(BatchSubsystem))
+	for _, sub := range subsystems {
+		s.Register(sub)
+	}
 
 	go func() {
 		err := s.Run()

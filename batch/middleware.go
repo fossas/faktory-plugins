@@ -6,6 +6,7 @@ import (
 
 	"github.com/contribsys/faktory/manager"
 	"github.com/contribsys/faktory/util"
+	"github.com/fossas/faktory-plugins/requeue"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -26,6 +27,12 @@ var pushToMatchLua = redis.NewScript(`
 
 // pushMiddleware tracks jobs being added to a batch
 func (b *BatchSubsystem) pushMiddleware(ctx context.Context, next func() error) error {
+	// During REQUEUE, the job is being put back on the queue — not a new addition.
+	// Skip batch accounting so total/pending counters are not inflated.
+	if requeue.IsRequeue(ctx) {
+		return next()
+	}
+
 	mh := ctx.Value(manager.MiddlewareHelperKey).(manager.Context)
 	job := mh.Job()
 
@@ -77,6 +84,12 @@ func (b *BatchSubsystem) pushMiddleware(ctx context.Context, next func() error) 
 
 // ackMiddleware handles job completion (success)
 func (b *BatchSubsystem) ackMiddleware(ctx context.Context, next func() error) error {
+	// During REQUEUE, the job is being put back on the queue — not completed.
+	// Skip batch accounting so pending is not decremented prematurely.
+	if requeue.IsRequeue(ctx) {
+		return next()
+	}
+
 	mh := ctx.Value(manager.MiddlewareHelperKey).(manager.Context)
 	job := mh.Job()
 
