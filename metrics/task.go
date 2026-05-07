@@ -74,7 +74,7 @@ func (m *metricsTask) Execute(ctx context.Context) error {
 
 		pausedQueues, err := m.Subsystem.Server.Store().PausedQueues(ctx)
 		pausedLookupFailed := err != nil
-		if err != nil {
+		if pausedLookupFailed {
 			util.Warnf("unable to fetch paused queues: %v", err)
 		}
 		pausedSet := make(map[string]struct{}, len(pausedQueues))
@@ -85,8 +85,7 @@ func (m *metricsTask) Execute(ctx context.Context) error {
 		m.Subsystem.Server.Store().EachQueue(ctx, func(queue storage.Queue) {
 			tags := append(m.Subsystem.Options.Tags, fmt.Sprintf("queue:%s", queue.Name()))
 
-			// Skip emission on lookup failure — emitting 0 here would falsely report
-			// every queue as active when we don't actually know.
+			// Skip emission on lookup failure
 			if !pausedLookupFailed {
 				var pausedValue float64
 				if _, ok := pausedSet[queue.Name()]; ok {
