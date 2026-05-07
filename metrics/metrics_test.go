@@ -134,18 +134,21 @@ func TestMetrics(t *testing.T) {
 			mockDoer.EXPECT().Timing("jobs.enqueued.default.time_hist", gomock.Any(), tags, gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("faktory.jobs.current_latency", gomock.Any(), append(tags, "queue:default"), gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Timing("faktory.jobs.latency", gomock.Any(), append(tags, "queue:default"), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("faktory.queue.paused", float64(0), append(tags, "queue:default"), gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.enqueued.builds.count", float64(6), tags, gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("faktory.jobs.enqueued", float64(6), append(tags, "queue:builds"), gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.enqueued.builds.time", gomock.Any(), tags, gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Timing("jobs.enqueued.builds.time_hist", gomock.Any(), tags, gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("faktory.jobs.current_latency", gomock.Any(), append(tags, "queue:builds"), gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Timing("faktory.jobs.latency", gomock.Any(), append(tags, "queue:builds"), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("faktory.queue.paused", float64(0), append(tags, "queue:builds"), gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.enqueued.tests.count", float64(1), tags, gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("faktory.jobs.enqueued", float64(1), append(tags, "queue:tests"), gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("jobs.enqueued.tests.time", gomock.Any(), tags, gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Timing("jobs.enqueued.tests.time_hist", gomock.Any(), tags, gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Gauge("faktory.jobs.current_latency", gomock.Any(), append(tags, "queue:tests"), gomock.Any()).Return(nil).Times(1)
 			mockDoer.EXPECT().Timing("faktory.jobs.latency", gomock.Any(), append(tags, "queue:tests"), gomock.Any()).Return(nil).Times(1)
+			mockDoer.EXPECT().Gauge("faktory.queue.paused", float64(0), append(tags, "queue:tests"), gomock.Any()).Return(nil).Times(1)
 
 			// create 15 jobs
 			// default queue
@@ -218,6 +221,72 @@ func TestMetrics(t *testing.T) {
 
 			m := &metricsTask{system}
 			m.Execute(ctx)
+		})
+	})
+
+	t.Run("paused queue is reported as 1", func(t *testing.T) {
+		pausedCtrl := gomock.NewController(t)
+		defer pausedCtrl.Finish()
+		mockDoer := mocks.NewMockClientInterface(pausedCtrl)
+
+		system := new(MetricsSubsystem)
+		ctx := context.Background()
+		configDir := createConfigDir(t)
+		confgFile := fmt.Sprintf("%s/conf.d/statsd.toml", configDir)
+		if err := ioutil.WriteFile(confgFile, []byte(statsdConfig), os.FileMode(0444)); err != nil {
+			panic(err)
+		}
+		runSystem(configDir, func(server *server.Server, cl *client.Client) {
+			system.Server = server
+			system.Options = system.getOptions(server)
+			system.statsDClient = mockDoer
+			system.addMiddleware()
+
+			tags := []string{"tag1:value1", "tag2:value2"}
+
+			// Assert the paused queue is reported as 1.
+			mockDoer.EXPECT().
+				Gauge("faktory.queue.paused", float64(1), append(tags, "queue:paused_q"), gomock.Any()).
+				Return(nil).
+				Times(1)
+
+			// Execute emits metrics from a goroutine. To avoid racing the goroutine
+			// against pausedCtrl.Finish(), wait for the final unconditional emission
+			// in Execute — the namespaced "jobs.enqueued.count" gauge — before
+			// returning from the runner.
+			executeDone := make(chan struct{})
+			mockDoer.EXPECT().
+				Gauge("jobs.enqueued.count", gomock.Any(), gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ string, _ float64, _ []string, _ float64) error {
+					close(executeDone)
+					return nil
+				}).
+				Times(1)
+
+			// Catch-alls absorb the other middleware and task emissions; this subtest
+			// only asserts the new paused-state metric.
+			mockDoer.EXPECT().Gauge(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+			mockDoer.EXPECT().Timing(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+			mockDoer.EXPECT().Incr(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+			if err := cl.Push(createJob("paused_q", "Test", 1)); err != nil {
+				panic(err)
+			}
+			q, ok := server.Store().ExistingQueue(ctx, "paused_q")
+			if !ok {
+				t.Fatal("queue paused_q not found after push")
+			}
+			if err := q.Pause(ctx); err != nil {
+				t.Fatalf("unable to pause queue: %v", err)
+			}
+
+			m := &metricsTask{system}
+			m.Execute(ctx)
+			select {
+			case <-executeDone:
+			case <-time.After(5 * time.Second):
+				t.Fatal("timed out waiting for metrics task to finish")
+			}
 		})
 	})
 }
