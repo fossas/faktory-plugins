@@ -73,6 +73,7 @@ func (m *metricsTask) Execute(ctx context.Context) error {
 		var totalEnqueued uint64 = 0
 
 		pausedQueues, err := m.Subsystem.Server.Store().PausedQueues(ctx)
+		pausedLookupFailed := err != nil
 		if err != nil {
 			util.Warnf("unable to fetch paused queues: %v", err)
 		}
@@ -84,12 +85,16 @@ func (m *metricsTask) Execute(ctx context.Context) error {
 		m.Subsystem.Server.Store().EachQueue(ctx, func(queue storage.Queue) {
 			tags := append(m.Subsystem.Options.Tags, fmt.Sprintf("queue:%s", queue.Name()))
 
-			var pausedValue float64
-			if _, ok := pausedSet[queue.Name()]; ok {
-				pausedValue = 1
-			}
-			if err := m.Subsystem.StatsDClient().Gauge("faktory.queue.paused", pausedValue, tags, 1); err != nil {
-				util.Warnf("unable to submit metric: %v", err)
+			// Skip emission on lookup failure — emitting 0 here would falsely report
+			// every queue as active when we don't actually know.
+			if !pausedLookupFailed {
+				var pausedValue float64
+				if _, ok := pausedSet[queue.Name()]; ok {
+					pausedValue = 1
+				}
+				if err := m.Subsystem.StatsDClient().Gauge("faktory.queue.paused", pausedValue, tags, 1); err != nil {
+					util.Warnf("unable to submit metric: %v", err)
+				}
 			}
 
 			count := queue.Size(ctx)

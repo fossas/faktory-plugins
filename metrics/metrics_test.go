@@ -244,10 +244,17 @@ func TestMetrics(t *testing.T) {
 
 			tags := []string{"tag1:value1", "tag2:value2"}
 
-			// Specific expectation registered first so gomock matches it before the
-			// catch-all below. If Execute fails to emit queue_paused=1 for the paused
-			// queue, this expectation goes unsatisfied and pausedCtrl.Finish() fails.
-			mockDoer.EXPECT().Gauge("faktory.queue.paused", float64(1), append(tags, "queue:paused_q"), gomock.Any()).Return(nil).Times(1)
+			// Execute emits metrics from a goroutine, so we need to wait for the
+			// paused gauge to fire before pausedCtrl.Finish() validates expectations.
+			// DoAndReturn closes pausedEmitted when the specific call is matched.
+			pausedEmitted := make(chan struct{})
+			mockDoer.EXPECT().
+				Gauge("faktory.queue.paused", float64(1), append(tags, "queue:paused_q"), gomock.Any()).
+				DoAndReturn(func(_ string, _ float64, _ []string, _ float64) error {
+					close(pausedEmitted)
+					return nil
+				}).
+				Times(1)
 
 			// Catch-alls absorb the other middleware and task emissions; this subtest
 			// only asserts the new paused-state metric.
@@ -268,9 +275,11 @@ func TestMetrics(t *testing.T) {
 
 			m := &metricsTask{system}
 			m.Execute(ctx)
-			// Execute runs work in a goroutine; wait for it to finish before
-			// the deferred pausedCtrl.Finish() validates expectations.
-			time.Sleep(500 * time.Millisecond)
+			select {
+			case <-pausedEmitted:
+			case <-time.After(5 * time.Second):
+				t.Fatal("timed out waiting for faktory.queue.paused emission")
+			}
 		})
 	})
 }
