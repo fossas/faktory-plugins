@@ -22,6 +22,7 @@ enabled = true # enables this plugin
 | Name                                                 | Type      | Description                                                                                                                          |
 | ---------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | faktory.ops.connections                              | Gauge     | Faktory client network connections                                                                                                   |
+| faktory.queue.paused{queue}                          | Gauge     | 1 if {queue} is paused, 0 otherwise                                                                                                  |
 | faktory.jobs.working                                 | Gauge     | Current number of jobs being processed                                                                                               |
 | faktory.jobs.scheduled                               | Gauge     | Current number of scheduled jobs                                                                                                     |
 | faktory.jobs.retries                                 | Gauge     | Current number of jobs to be retried                                                                                                 |

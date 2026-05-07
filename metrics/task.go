@@ -24,6 +24,10 @@ func (m *metricsTask) Name() string {
 }
 
 // Execute - runs the task to collect metrics
+//
+// Note: The namespaced "<namespace>.*" metric emissions in this file (built via
+// PrefixMetricName) are deprecated. New metrics should be emitted only in the
+// canonical faktory.* tagged form.
 func (m *metricsTask) Execute(ctx context.Context) error {
 	go func() {
 		connectionCount := m.Subsystem.Server.Stats.Connections
@@ -68,8 +72,25 @@ func (m *metricsTask) Execute(ctx context.Context) error {
 
 		var totalEnqueued uint64 = 0
 
+		pausedQueues, err := m.Subsystem.Server.Store().PausedQueues(ctx)
+		if err != nil {
+			util.Warnf("unable to fetch paused queues: %v", err)
+		}
+		pausedSet := make(map[string]struct{}, len(pausedQueues))
+		for _, name := range pausedQueues {
+			pausedSet[name] = struct{}{}
+		}
+
 		m.Subsystem.Server.Store().EachQueue(ctx, func(queue storage.Queue) {
 			tags := append(m.Subsystem.Options.Tags, fmt.Sprintf("queue:%s", queue.Name()))
+
+			var pausedValue float64
+			if _, ok := pausedSet[queue.Name()]; ok {
+				pausedValue = 1
+			}
+			if err := m.Subsystem.StatsDClient().Gauge("faktory.queue.paused", pausedValue, tags, 1); err != nil {
+				util.Warnf("unable to submit metric: %v", err)
+			}
 
 			count := queue.Size(ctx)
 			totalEnqueued += count

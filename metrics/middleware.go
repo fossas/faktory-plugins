@@ -38,6 +38,9 @@ func (m *MetricsSubsystem) addMiddleware() {
 		tags = append(tags, "status:success")
 
 		if mh.Reservation() != nil {
+			// Deprecated: namespaced "<namespace>.*" metrics (PrefixMetricName) are
+			// retained for backward compatibility only. New metrics in this plugin
+			// should be emitted exclusively via the faktory.* tagged form.
 			if err := m.StatsDClient().Timing(m.PrefixMetricName("succeeded.time"), time.Duration(time.Since(mh.Reservation().ReservedAt())), tags, 1); err != nil {
 				util.Warnf("unable to submit metric: %v", err)
 			}
