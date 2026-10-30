@@ -130,7 +130,7 @@ The Faktory Enterprise Web UI includes a Batches tab where you can get a list of
 * ACKs and FAILs for a batch that has already been deleted are ignored.
 * A retrying job that is deleted or killed from the Web UI never ACKs or fails, so its batch's success callback waits until the sweep reaps the batch.
 * Batches created by a version of this plugin from before success waited for retries have no `unfinished` counter. They keep the old rule: success fires once every job has run once and none has died.
-* A version of this plugin from before the `unfinished` counter doesn't maintain it. After rolling back to such a version, delete the counters before rolling forward again, so the batches that ran in between fall back to the old rule: `redis-cli --scan --pattern 'batch:*:unfinished' | xargs redis-cli DEL`. Otherwise their counters are wrong, and their success callbacks may fire early or wait until the sweep reaps them.
+* A version of this plugin from before the `unfinished` counter doesn't maintain it. After rolling back to such a version, delete the counters before rolling forward again, so the batches that ran in between fall back to the old rule. Faktory's Redis listens on `redis.sock` in its storage directory (`/var/lib/faktory/db` by default), so run this on the Faktory host: `redis-cli -s /var/lib/faktory/db/redis.sock --scan --pattern 'batch:*:unfinished' | xargs redis-cli -s /var/lib/faktory/db/redis.sock DEL`. Otherwise their counters are wrong, and their success callbacks may fire early or wait until the sweep reaps them.
 
 ## Side Note/Rant
 
