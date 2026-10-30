@@ -42,13 +42,27 @@ func failAndRetry(t *testing.T, s *server.Server, cl *client.Client) {
 	require.NoError(t, err)
 }
 
-func fetchCallback(t *testing.T, cl *client.Client) *client.Job {
+// waitForCallback waits for a callback job to be enqueued. Callbacks are pushed
+// from a goroutine after the ACK or FAIL that triggers them returns.
+func waitForCallback(t *testing.T, cl *client.Client) *client.Job {
 	t.Helper()
-	// Callbacks are pushed from a goroutine after the ACK or FAIL returns.
-	time.Sleep(100 * time.Millisecond)
+	var callback *client.Job
+	require.Eventually(t, func() bool {
+		job, err := cl.Fetch("callbacks")
+		callback = job
+		return err == nil && job != nil
+	}, 5*time.Second, 20*time.Millisecond, "expected a callback to be enqueued")
+	return callback
+}
+
+// assertNoCallback checks the batch's callbacks synchronously, so any callback
+// its counters allow has been enqueued, then asserts that none was.
+func assertNoCallback(t *testing.T, s *server.Server, cl *client.Client, bid string, msg string) {
+	t.Helper()
+	batchSubsystem(t, s).checkAndFireCallbacks(context.Background(), bid)
 	callback, err := cl.Fetch("callbacks")
 	require.NoError(t, err)
-	return callback
+	assert.Nil(t, callback, msg)
 }
 
 func TestSuccessWaitsForRetryingMember(t *testing.T) {
@@ -57,18 +71,18 @@ func TestSuccessWaitsForRetryingMember(t *testing.T) {
 
 		failAndRetry(t, s, cl)
 
-		callback := fetchCallback(t, cl)
+		callback := waitForCallback(t, cl)
 		require.NotNil(t, callback, "complete fires once every member has run once")
 		assert.Equal(t, "CompleteCallback", callback.Type)
 		require.NoError(t, cl.Ack(callback.Jid))
-		assert.Nil(t, fetchCallback(t, cl), "success must wait while a member is still retrying")
+		assertNoCallback(t, s, cl, bid, "success must wait while a member is still retrying")
 
 		retried, err := cl.Fetch("default")
 		require.NoError(t, err)
 		require.NotNil(t, retried)
 		require.NoError(t, cl.Ack(retried.Jid))
 
-		callback = fetchCallback(t, cl)
+		callback = waitForCallback(t, cl)
 		require.NotNil(t, callback, "success fires once the retrying member is ACKed")
 		assert.Equal(t, "SuccessCallback", callback.Type)
 		assert.Equal(t, bid, callback.Custom["_bid"])
@@ -81,10 +95,10 @@ func TestSuccessNeverFiresWhenRetryingMemberDies(t *testing.T) {
 
 		failAndRetry(t, s, cl)
 
-		callback := fetchCallback(t, cl)
+		callback := waitForCallback(t, cl)
 		require.NotNil(t, callback)
 		assert.Equal(t, "CompleteCallback", callback.Type)
-		assert.Nil(t, fetchCallback(t, cl), "success must wait while a member is still retrying")
+		assertNoCallback(t, s, cl, bid, "success must wait while a member is still retrying")
 
 		// The last retry fails, so the member dies.
 		retried, err := cl.Fetch("default")
@@ -92,7 +106,7 @@ func TestSuccessNeverFiresWhenRetryingMemberDies(t *testing.T) {
 		require.NotNil(t, retried)
 		require.NoError(t, cl.Fail(retried.Jid, fmt.Errorf("permanent error"), nil))
 
-		assert.Nil(t, fetchCallback(t, cl), "success must not fire after a member died")
+		assertNoCallback(t, s, cl, bid, "success must not fire after a member died")
 		status := getStatus(t, cl, bid)
 		assert.Equal(t, int64(1), status.Failed)
 	})
@@ -150,12 +164,12 @@ func TestUnfinishedCounter(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, holding)
 		require.NoError(t, cl.Ack(holding.Jid))
-		time.Sleep(100 * time.Millisecond)
 
 		// One member died, so success can never fire and the batch is cleaned up.
-		exists, err := rds.Exists(ctx, batchUnfinishedKey(bid)).Result()
-		require.NoError(t, err)
-		assert.Equal(t, int64(0), exists, "cleanup deletes the counter")
+		assert.Eventually(t, func() bool {
+			exists, err := rds.Exists(ctx, batchUnfinishedKey(bid)).Result()
+			return err == nil && exists == 0
+		}, 5*time.Second, 20*time.Millisecond, "cleanup deletes the counter")
 	})
 }
 
@@ -181,7 +195,7 @@ func TestBatchWithoutUnfinishedCounterKeepsOldRule(t *testing.T) {
 
 		failAndRetry(t, s, cl)
 
-		callback := fetchCallback(t, cl)
+		callback := waitForCallback(t, cl)
 		require.NotNil(t, callback, "a batch without the counter fires success after first attempts")
 		assert.Equal(t, "SuccessCallback", callback.Type)
 
