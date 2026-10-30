@@ -172,35 +172,3 @@ func TestUnfinishedCounter(t *testing.T) {
 		}, 5*time.Second, 20*time.Millisecond, "cleanup deletes the counter")
 	})
 }
-
-// A batch created before the unfinished counter existed has no counter key.
-// It keeps the old rule, so its success callback does not wait for retries.
-func TestBatchWithoutUnfinishedCounterKeepsOldRule(t *testing.T) {
-	withServer(func(s *server.Server, cl *client.Client) {
-		ctx := context.Background()
-		rds := s.Manager().Redis()
-
-		result, err := cl.Generic(`BATCH NEW {"success":{"jobtype":"SuccessCallback","queue":"callbacks"}}`)
-		require.NoError(t, err)
-		bid := string(result)
-		require.NoError(t, rds.Del(ctx, batchUnfinishedKey(bid)).Err())
-
-		retries := 5
-		job := client.NewJob("RetryableJob", 1)
-		job.SetCustom("bid", bid)
-		job.Retry = &retries
-		require.NoError(t, cl.Push(job))
-		_, err = cl.Generic("BATCH COMMIT " + bid)
-		require.NoError(t, err)
-
-		failAndRetry(t, s, cl)
-
-		callback := waitForCallback(t, cl)
-		require.NotNil(t, callback, "a batch without the counter fires success after first attempts")
-		assert.Equal(t, "SuccessCallback", callback.Type)
-
-		exists, err := rds.Exists(ctx, batchUnfinishedKey(bid)).Result()
-		require.NoError(t, err)
-		assert.Equal(t, int64(0), exists, "the counter must not be created for an existing batch")
-	})
-}

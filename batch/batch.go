@@ -259,8 +259,6 @@ func isCommitted(ctx context.Context, s *server.Server, bid string) (bool, error
 // adjustCountersLua applies deltas to a batch's counters, but only if the
 // batch still exists. Without the existence check, a late ACK or FAIL for a
 // deleted or expired batch would recreate bare counter keys with no TTL.
-// The unfinished counter is only adjusted if it exists: batches created before
-// it was added don't have one, and keep the old success rule.
 // Returns the new pending count, or nil if the batch does not exist.
 // KEYS[1] = batch meta, KEYS[2] = pending, KEYS[3] = failed, KEYS[4] = total,
 // KEYS[5] = unfinished
@@ -271,7 +269,7 @@ var adjustCountersLua = redis.NewScript(`
 	end
 	for i = 1, 4 do
 		local delta = tonumber(ARGV[i])
-		if delta ~= 0 and (i < 4 or redis.call("EXISTS", KEYS[i + 1]) == 1) then
+		if delta ~= 0 then
 			redis.call("INCRBY", KEYS[i + 1], delta)
 		end
 	end
@@ -307,13 +305,9 @@ func adjustCounters(ctx context.Context, s *server.Server, bid string, d counter
 	return result, nil
 }
 
-// getUnfinished returns a batch's unfinished count. A batch created before the
-// counter was added has none, and counts as 0 so it keeps the old success rule.
+// getUnfinished returns a batch's unfinished count.
 func getUnfinished(ctx context.Context, s *server.Server, bid string) (int64, error) {
 	n, err := s.Manager().Redis().Get(ctx, batchUnfinishedKey(bid)).Int64()
-	if err == redis.Nil {
-		return 0, nil
-	}
 	if err != nil {
 		return 0, fmt.Errorf("failed to get unfinished counter for batch %s: %w", bid, err)
 	}
