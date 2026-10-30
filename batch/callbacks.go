@@ -2,6 +2,7 @@ package batch
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/contribsys/faktory/client"
@@ -126,7 +127,7 @@ func (b *BatchSubsystem) fireCallback(ctx context.Context, bid string, callbackT
 	if callbackJob == nil {
 		// No callback defined, mark as finished
 		util.Debugf("batch %s has no %s callback defined, marking as finished", bid, callbackType)
-		if err := rds.Set(ctx, stateKey, CallbackFinished, 0).Err(); err != nil {
+		if err := setCallbackState(ctx, b.Server, stateKey, bid, CallbackFinished); err != nil {
 			util.Warnf("batch callbacks: failed to mark %s callback as finished for batch %s: %v", callbackType, bid, err)
 			rds.Del(ctx, lockKey)
 			return
@@ -141,12 +142,13 @@ func (b *BatchSubsystem) fireCallback(ctx context.Context, bid string, callbackT
 	job := &client.Job{
 		// Faktory interally uses a random string for the JID, but FOSSA Core uses UUIDs.
 		// We're intentionally using a UUID here to match that expectation.
-		Jid:       uuid.NewString(),
-		Type:      callbackJob.Type,
-		Args:      callbackJob.Args,
-		Queue:     callbackJob.Queue,
-		Retry:     callbackJob.Retry,
-		CreatedAt: util.Nows(),
+		Jid:        uuid.NewString(),
+		Type:       callbackJob.Type,
+		Args:       callbackJob.Args,
+		Queue:      callbackJob.Queue,
+		Retry:      callbackJob.Retry,
+		ReserveFor: callbackJob.ReserveFor,
+		CreatedAt:  util.Nows(),
 	}
 
 	// Ensure Args is set (Faktory requires it)
@@ -184,7 +186,9 @@ func (b *BatchSubsystem) fireCallback(ctx context.Context, bid string, callbackT
 	}
 
 	// Mark as enqueued after successful push
-	rds.Set(ctx, stateKey, CallbackEnqueued, 0)
+	if err := setCallbackState(ctx, b.Server, stateKey, bid, CallbackEnqueued); err != nil {
+		util.Warnf("batch callbacks: failed to mark %s callback as enqueued for batch %s: %v", callbackType, bid, err)
+	}
 
 	// Release lock
 	rds.Del(ctx, lockKey)
@@ -194,8 +198,6 @@ func (b *BatchSubsystem) fireCallback(ctx context.Context, bid string, callbackT
 
 // handleCallbackComplete is called when a callback job finishes (ACK'd)
 func (b *BatchSubsystem) handleCallbackComplete(ctx context.Context, bid string, callbackType string) {
-	rds := b.Server.Manager().Redis()
-
 	// Update callback state to finished
 	var stateKey string
 	if callbackType == "complete" {
@@ -204,7 +206,11 @@ func (b *BatchSubsystem) handleCallbackComplete(ctx context.Context, bid string,
 		stateKey = batchSuccessStateKey(bid)
 	}
 
-	err := rds.Set(ctx, stateKey, CallbackFinished, 0).Err()
+	err := setCallbackState(ctx, b.Server, stateKey, bid, CallbackFinished)
+	if errors.Is(err, ErrBatchNotFound) {
+		util.Debugf("batch %s %s callback completed after the batch was deleted", bid, callbackType)
+		return
+	}
 	if err != nil {
 		util.Warnf("batch callbacks: failed to mark %s callback as finished for batch %s: %v", callbackType, bid, err)
 		return
@@ -233,7 +239,6 @@ func (b *BatchSubsystem) handleCallbackFailure(ctx context.Context, job *client.
 
 	util.Warnf("batch %s %s callback job failed terminally, marking as finished", bid, callbackType)
 
-	rds := b.Server.Manager().Redis()
 	var stateKey string
 	if callbackType == "complete" {
 		stateKey = batchCompleteStateKey(bid)
@@ -241,7 +246,10 @@ func (b *BatchSubsystem) handleCallbackFailure(ctx context.Context, job *client.
 		stateKey = batchSuccessStateKey(bid)
 	}
 
-	err := rds.Set(ctx, stateKey, CallbackFinished, 0).Err()
+	err := setCallbackState(ctx, b.Server, stateKey, bid, CallbackFinished)
+	if errors.Is(err, ErrBatchNotFound) {
+		return
+	}
 	if err != nil {
 		util.Warnf("batch callbacks: failed to mark %s callback as finished for batch %s: %v", callbackType, bid, err)
 		return

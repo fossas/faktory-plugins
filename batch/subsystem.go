@@ -77,9 +77,13 @@ func (b *BatchSubsystem) Shutdown(s *server.Server) error {
 	return nil
 }
 
-// addMiddleware registers the batch middleware for push, ack, and fail operations
+// addMiddleware registers the batch middleware for push, fetch, ack, and fail operations.
+// Middleware runs in registration order, and the push and fetch middleware only see
+// rejections from middleware registered after them, so this subsystem must be
+// registered before uniq and expire.
 func (b *BatchSubsystem) addMiddleware() {
 	b.Server.Manager().AddMiddleware("push", b.pushMiddleware)
+	b.Server.Manager().AddMiddleware("fetch", b.fetchMiddleware)
 	b.Server.Manager().AddMiddleware("ack", b.ackMiddleware)
 	b.Server.Manager().AddMiddleware("fail", b.failMiddleware)
 }

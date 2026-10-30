@@ -2,6 +2,7 @@ package batch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/contribsys/faktory/manager"
@@ -79,7 +80,63 @@ func (b *BatchSubsystem) pushMiddleware(ctx context.Context, next func() error) 
 	}
 
 	util.Debugf("Added job %s to batch %s", job.Jid, bid)
-	return next()
+
+	// A later middleware (e.g. uniq's NOTUNIQUE) or the store can still reject
+	// the push. The job would then never ACK or FAIL, so undo the increment.
+	if err := next(); err != nil {
+		pending, rbErr := adjustCounters(ctx, b.Server, bid, -1, 0, -1)
+		if rbErr != nil {
+			util.Warnf("batch push middleware: failed to roll back counters for batch %s: %v", bid, rbErr)
+		} else if pending <= 0 {
+			go b.checkAndFireCallbacks(context.Background(), bid)
+		}
+		return err
+	}
+	return nil
+}
+
+// fetchMiddleware releases a batch job that a later fetch middleware discards
+// (expire drops jobs past their expires_at). The job never runs, so it would
+// never ACK or FAIL and its batch would wait on it forever. A discarded member
+// counts as a terminal failure; a discarded callback counts as finished.
+func (b *BatchSubsystem) fetchMiddleware(ctx context.Context, next func() error) error {
+	err := next()
+	var known manager.KnownError
+	if err == nil || !errors.As(err, &known) || known.Code() != "DISCARD" {
+		return err
+	}
+
+	mh := ctx.Value(manager.MiddlewareHelperKey).(manager.Context)
+	job := mh.Job()
+
+	if cbType, ok := job.GetCustom("_cb"); ok {
+		bid, bidOk := job.Custom["_bid"].(string)
+		cbTypeStr, cbOk := cbType.(string)
+		if bidOk && cbOk && bid != "" && cbTypeStr != "" {
+			util.Warnf("batch %s %s callback job %s was discarded, marking as finished", bid, cbTypeStr, job.Jid)
+			b.handleCallbackComplete(ctx, bid, cbTypeStr)
+		}
+		return err
+	}
+
+	bid, ok := job.Custom["bid"].(string)
+	if !ok || bid == "" {
+		return err
+	}
+
+	// pending was already decremented if the job failed before.
+	var pendingDelta int64
+	if job.Failure == nil {
+		pendingDelta = -1
+	}
+	if _, adjErr := adjustCounters(ctx, b.Server, bid, pendingDelta, 1, 0); adjErr != nil {
+		util.Warnf("batch fetch middleware: failed to release discarded job %s from batch %s: %v", job.Jid, bid, adjErr)
+		return err
+	}
+
+	util.Debugf("Job %s in batch %s was discarded, counted as failed", job.Jid, bid)
+	go b.checkAndFireCallbacks(context.Background(), bid)
+	return err
 }
 
 // ackMiddleware handles job completion (success)
@@ -127,22 +184,19 @@ func (b *BatchSubsystem) ackMiddleware(ctx context.Context, next func() error) e
 		return nil
 	}
 
-	rds := b.Server.Manager().Redis()
-	var pending int64
-
 	// Only decrement on first execution — if the job previously failed,
 	// pending was already decremented by failMiddleware on first failure.
-	isFirstExecution := job.Failure == nil
-	if isFirstExecution {
-		pending, err = rds.Decr(ctx, batchPendingKey(bid)).Result()
-		if err != nil {
-			util.Warnf("batch ack middleware: failed to decrement pending for batch %s: %v", bid, err)
-		}
-	} else {
-		pending, err = rds.Get(ctx, batchPendingKey(bid)).Int64()
-		if err != nil {
-			util.Warnf("batch ack middleware: failed to get pending for batch %s: %v", bid, err)
-		}
+	var pendingDelta int64
+	if job.Failure == nil {
+		pendingDelta = -1
+	}
+	pending, err := adjustCounters(ctx, b.Server, bid, pendingDelta, 0, 0)
+	if errors.Is(err, ErrBatchNotFound) {
+		util.Debugf("Job %s ACKed after its batch %s was deleted", job.Jid, bid)
+		return nil
+	}
+	if err != nil {
+		util.Warnf("batch ack middleware: %v", err)
 	}
 
 	util.Debugf("Job %s in batch %s completed (ACK)", job.Jid, bid)
@@ -218,25 +272,28 @@ func (b *BatchSubsystem) failMiddleware(ctx context.Context, next func() error) 
 		return nil
 	}
 
-	rds := b.Server.Manager().Redis()
-	pipe := rds.TxPipeline()
+	var pendingDelta, failedDelta int64
 
 	// Decrement pending only on first execution
 	// (complete callback fires when all jobs have executed at least once)
 	if isFirstExecution {
-		pipe.Decr(ctx, batchPendingKey(bid))
+		pendingDelta = -1
 		util.Debugf("Job %s in batch %s failed on first execution", job.Jid, bid)
 	}
 
 	// Increment failed only on terminal failure
 	if isTerminalFailure {
-		pipe.Incr(ctx, batchFailedKey(bid))
+		failedDelta = 1
 		util.Debugf("Job %s in batch %s failed terminally", job.Jid, bid)
 	}
 
-	_, err = pipe.Exec(ctx)
+	_, err = adjustCounters(ctx, b.Server, bid, pendingDelta, failedDelta, 0)
+	if errors.Is(err, ErrBatchNotFound) {
+		util.Debugf("Job %s FAILed after its batch %s was deleted", job.Jid, bid)
+		return nil
+	}
 	if err != nil {
-		util.Warnf("batch fail middleware: failed to update counters for batch %s: %v", bid, err)
+		util.Warnf("batch fail middleware: %v", err)
 	}
 
 	// Check if callbacks should fire

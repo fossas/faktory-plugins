@@ -24,6 +24,12 @@ const (
 // Batches that are not committed within this time will expire.
 const BatchTTL = 30 * time.Minute
 
+// CommittedBatchTTL is how long a committed batch may wait for its callbacks
+// before the sweep reaps it. It is longer than the ~21 days a job with the
+// default 25 retries can spend retrying, so only batches that can no longer
+// finish (a leaked pending count, a member deleted by hand) are reaped.
+const CommittedBatchTTL = 30 * 24 * time.Hour
+
 // Callback state constants
 const (
 	CallbackPending  = ""  // Callback not yet enqueued
@@ -238,17 +244,73 @@ func isCommitted(ctx context.Context, s *server.Server, bid string) (bool, error
 	return committed == IsCommitted, nil
 }
 
+// adjustCountersLua applies deltas to a batch's counters, but only if the
+// batch still exists. Without the existence check, a late ACK or FAIL for a
+// deleted or expired batch would recreate bare counter keys with no TTL.
+// Returns the new pending count, or nil if the batch does not exist.
+// KEYS[1] = batch meta, KEYS[2] = pending, KEYS[3] = failed, KEYS[4] = total
+// ARGV[1..3] = deltas for pending, failed, total
+var adjustCountersLua = redis.NewScript(`
+	if redis.call("EXISTS", KEYS[1]) == 0 then
+		return false
+	end
+	for i = 1, 3 do
+		local delta = tonumber(ARGV[i])
+		if delta ~= 0 then
+			redis.call("INCRBY", KEYS[i + 1], delta)
+		end
+	end
+	return tonumber(redis.call("GET", KEYS[2]) or "0")
+`)
+
+// adjustCounters applies deltas to a batch's pending, failed and total counters
+// and returns the new pending count. It returns ErrBatchNotFound, and changes
+// nothing, if the batch no longer exists.
+func adjustCounters(ctx context.Context, s *server.Server, bid string, pending, failed, total int64) (int64, error) {
+	rds := s.Manager().Redis()
+	result, err := adjustCountersLua.Run(ctx, rds,
+		[]string{
+			batchMetaKey(bid),    // KEYS[1]
+			batchPendingKey(bid), // KEYS[2]
+			batchFailedKey(bid),  // KEYS[3]
+			batchTotalKey(bid),   // KEYS[4]
+		},
+		pending, failed, total,
+	).Int64()
+	if err == redis.Nil {
+		return 0, fmt.Errorf("batch %s: %w", bid, ErrBatchNotFound)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("failed to update counters for batch %s: %w", bid, err)
+	}
+	return result, nil
+}
+
+// setCallbackState sets a callback's state, but only if the batch still exists
+// (the state keys are created with the batch). It returns ErrBatchNotFound if
+// the batch has been deleted, so a late callback ACK doesn't recreate the key.
+func setCallbackState(ctx context.Context, s *server.Server, stateKey string, bid string, state string) error {
+	set, err := s.Manager().Redis().SetXX(ctx, stateKey, state, 0).Result()
+	if err != nil {
+		return err
+	}
+	if !set {
+		return fmt.Errorf("batch %s: %w", bid, ErrBatchNotFound)
+	}
+	return nil
+}
+
 // setCommittedLua atomically persists all batch keys (removes TTL), sets the
-// committed flag, and adds the batch to the committed set. This prevents
+// committed flag and time, and adds the batch to the committed set. This prevents
 // partial failure where keys are persisted but the batch is never marked
 // committed, which would leave permanently orphaned keys.
 // KEYS[1..7] = batch keys to persist, KEYS[8] = committed set key
-// ARGV[1] = bid
+// ARGV[1] = bid, ARGV[2] = commit time
 var setCommittedLua = redis.NewScript(`
 	for i = 1, 7 do
 		redis.call("PERSIST", KEYS[i])
 	end
-	redis.call("HSET", KEYS[1], "committed", "1")
+	redis.call("HSET", KEYS[1], "committed", "1", "committed_at", ARGV[2])
 	redis.call("SADD", KEYS[8], ARGV[1])
 	return 1
 `)
@@ -269,6 +331,7 @@ func setCommitted(ctx context.Context, s *server.Server, bid string) error {
 			batchCommittedSetKey(),     // KEYS[8]
 		},
 		bid,
+		util.Nows(),
 	).Result()
 	if err != nil {
 		return fmt.Errorf("failed to commit batch: %w", err)

@@ -30,9 +30,13 @@ func withServerConfig(batchEnabled bool, runner func(s *server.Server, cl *clien
 	}
 	defer os.RemoveAll(configDir)
 
-	// Write batch config
+	// Write batch config. uniq is enabled too so tests that register the
+	// UniqSubsystem get its middleware; it is a no-op otherwise.
 	configContent := fmt.Sprintf(`[batch]
 enabled = %t
+
+[uniq]
+enabled = true
 `, batchEnabled)
 	if err := os.WriteFile(configDir+"/conf.d/batch.toml", []byte(configContent), 0644); err != nil {
 		panic(err)
