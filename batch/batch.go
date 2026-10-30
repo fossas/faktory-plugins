@@ -62,6 +62,13 @@ func batchFailedKey(bid string) string {
 	return fmt.Sprintf("%s:failed", batchKey(bid))
 }
 
+// batchUnfinishedKey counts members that have neither been ACKed nor failed
+// terminally. Unlike pending, it does not drop when a member's first attempt
+// fails, so success can wait for retries.
+func batchUnfinishedKey(bid string) string {
+	return fmt.Sprintf("%s:unfinished", batchKey(bid))
+}
+
 func batchCompleteStateKey(bid string) string {
 	return fmt.Sprintf("%s:complete_st", batchKey(bid))
 }
@@ -122,6 +129,7 @@ func createBatch(ctx context.Context, s *server.Server, batch *client.Batch) err
 	pipe.Set(ctx, batchTotalKey(batch.Bid), 0, BatchTTL)
 	pipe.Set(ctx, batchPendingKey(batch.Bid), 0, BatchTTL)
 	pipe.Set(ctx, batchFailedKey(batch.Bid), 0, BatchTTL)
+	pipe.Set(ctx, batchUnfinishedKey(batch.Bid), 0, BatchTTL)
 
 	// Initialize callback states with TTL
 	pipe.Set(ctx, batchCompleteStateKey(batch.Bid), CallbackPending, BatchTTL)
@@ -247,35 +255,44 @@ func isCommitted(ctx context.Context, s *server.Server, bid string) (bool, error
 // adjustCountersLua applies deltas to a batch's counters, but only if the
 // batch still exists. Without the existence check, a late ACK or FAIL for a
 // deleted or expired batch would recreate bare counter keys with no TTL.
+// The unfinished counter is only adjusted if it exists: batches created before
+// it was added don't have one, and keep the old success rule.
 // Returns the new pending count, or nil if the batch does not exist.
-// KEYS[1] = batch meta, KEYS[2] = pending, KEYS[3] = failed, KEYS[4] = total
-// ARGV[1..3] = deltas for pending, failed, total
+// KEYS[1] = batch meta, KEYS[2] = pending, KEYS[3] = failed, KEYS[4] = total,
+// KEYS[5] = unfinished
+// ARGV[1..4] = deltas for pending, failed, total, unfinished
 var adjustCountersLua = redis.NewScript(`
 	if redis.call("EXISTS", KEYS[1]) == 0 then
 		return false
 	end
-	for i = 1, 3 do
+	for i = 1, 4 do
 		local delta = tonumber(ARGV[i])
-		if delta ~= 0 then
+		if delta ~= 0 and (i < 4 or redis.call("EXISTS", KEYS[i + 1]) == 1) then
 			redis.call("INCRBY", KEYS[i + 1], delta)
 		end
 	end
 	return tonumber(redis.call("GET", KEYS[2]) or "0")
 `)
 
-// adjustCounters applies deltas to a batch's pending, failed and total counters
-// and returns the new pending count. It returns ErrBatchNotFound, and changes
-// nothing, if the batch no longer exists.
-func adjustCounters(ctx context.Context, s *server.Server, bid string, pending, failed, total int64) (int64, error) {
+// counterDeltas are the changes adjustCounters applies to a batch's counters.
+type counterDeltas struct {
+	pending, failed, total, unfinished int64
+}
+
+// adjustCounters applies deltas to a batch's counters and returns the new
+// pending count. It returns ErrBatchNotFound, and changes nothing, if the
+// batch no longer exists.
+func adjustCounters(ctx context.Context, s *server.Server, bid string, d counterDeltas) (int64, error) {
 	rds := s.Manager().Redis()
 	result, err := adjustCountersLua.Run(ctx, rds,
 		[]string{
-			batchMetaKey(bid),    // KEYS[1]
-			batchPendingKey(bid), // KEYS[2]
-			batchFailedKey(bid),  // KEYS[3]
-			batchTotalKey(bid),   // KEYS[4]
+			batchMetaKey(bid),       // KEYS[1]
+			batchPendingKey(bid),    // KEYS[2]
+			batchFailedKey(bid),     // KEYS[3]
+			batchTotalKey(bid),      // KEYS[4]
+			batchUnfinishedKey(bid), // KEYS[5]
 		},
-		pending, failed, total,
+		d.pending, d.failed, d.total, d.unfinished,
 	).Int64()
 	if err == redis.Nil {
 		return 0, fmt.Errorf("batch %s: %w", bid, ErrBatchNotFound)
@@ -284,6 +301,19 @@ func adjustCounters(ctx context.Context, s *server.Server, bid string, pending, 
 		return 0, fmt.Errorf("failed to update counters for batch %s: %w", bid, err)
 	}
 	return result, nil
+}
+
+// getUnfinished returns a batch's unfinished count. A batch created before the
+// counter was added has none, and counts as 0 so it keeps the old success rule.
+func getUnfinished(ctx context.Context, s *server.Server, bid string) (int64, error) {
+	n, err := s.Manager().Redis().Get(ctx, batchUnfinishedKey(bid)).Int64()
+	if err == redis.Nil {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("failed to get unfinished counter for batch %s: %w", bid, err)
+	}
+	return n, nil
 }
 
 // setCallbackState sets a callback's state, but only if the batch still exists
@@ -304,14 +334,14 @@ func setCallbackState(ctx context.Context, s *server.Server, stateKey string, bi
 // committed flag and time, and adds the batch to the committed set. This prevents
 // partial failure where keys are persisted but the batch is never marked
 // committed, which would leave permanently orphaned keys.
-// KEYS[1..7] = batch keys to persist, KEYS[8] = committed set key
+// KEYS[1..8] = batch keys to persist, KEYS[9] = committed set key
 // ARGV[1] = bid, ARGV[2] = commit time
 var setCommittedLua = redis.NewScript(`
-	for i = 1, 7 do
+	for i = 1, 8 do
 		redis.call("PERSIST", KEYS[i])
 	end
 	redis.call("HSET", KEYS[1], "committed", "1", "committed_at", ARGV[2])
-	redis.call("SADD", KEYS[8], ARGV[1])
+	redis.call("SADD", KEYS[9], ARGV[1])
 	return 1
 `)
 
@@ -328,7 +358,8 @@ func setCommitted(ctx context.Context, s *server.Server, bid string) error {
 			batchCompleteStateKey(bid), // KEYS[5]
 			batchSuccessStateKey(bid),  // KEYS[6]
 			batchChildrenKey(bid),      // KEYS[7]
-			batchCommittedSetKey(),     // KEYS[8]
+			batchUnfinishedKey(bid),    // KEYS[8]
+			batchCommittedSetKey(),     // KEYS[9]
 		},
 		bid,
 		util.Nows(),
@@ -345,7 +376,7 @@ func setCommitted(ctx context.Context, s *server.Server, bid string) error {
 // callbacks have already started.
 // KEYS[1] = batch meta, KEYS[2] = total, KEYS[3] = pending,
 // KEYS[4] = failed, KEYS[5] = complete_st, KEYS[6] = success_st,
-// KEYS[7] = children, KEYS[8] = committed set
+// KEYS[7] = children, KEYS[8] = unfinished, KEYS[9] = committed set
 // ARGV[1] = bid, ARGV[2] = TTL in seconds
 var setUncommittedLua = redis.NewScript(`
 	local complete_st = redis.call("GET", KEYS[5])
@@ -354,8 +385,8 @@ var setUncommittedLua = redis.NewScript(`
 		return 0
 	end
 	redis.call("HSET", KEYS[1], "committed", "0")
-	redis.call("SREM", KEYS[8], ARGV[1])
-	for i = 1, 7 do
+	redis.call("SREM", KEYS[9], ARGV[1])
+	for i = 1, 8 do
 		redis.call("EXPIRE", KEYS[i], ARGV[2])
 	end
 	return 1
@@ -374,7 +405,8 @@ func setUncommitted(ctx context.Context, s *server.Server, bid string) error {
 			batchCompleteStateKey(bid), // KEYS[5]
 			batchSuccessStateKey(bid),  // KEYS[6]
 			batchChildrenKey(bid),      // KEYS[7]
-			batchCommittedSetKey(),     // KEYS[8]
+			batchUnfinishedKey(bid),    // KEYS[8]
+			batchCommittedSetKey(),     // KEYS[9]
 		},
 		bid,
 		int(BatchTTL.Seconds()),
@@ -398,6 +430,7 @@ func deleteBatch(ctx context.Context, s *server.Server, bid string) error {
 		batchTotalKey(bid),
 		batchPendingKey(bid),
 		batchFailedKey(bid),
+		batchUnfinishedKey(bid),
 		batchCompleteStateKey(bid),
 		batchSuccessStateKey(bid),
 		batchChildrenKey(bid),

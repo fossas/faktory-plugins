@@ -57,8 +57,18 @@ func (b *BatchSubsystem) checkAndFireCallbacks(ctx context.Context, bid string) 
 	}
 
 	// Check success callback
-	// Fires when: pending == 0 AND failed == 0 AND no child failures AND complete callback enqueued (or not defined) AND all children's success callbacks finished
+	// Fires when: pending == 0 AND failed == 0 AND unfinished == 0 (every job ACKed, none still retrying)
+	// AND no child failures AND complete callback enqueued (or not defined) AND all children's success callbacks finished
 	if status.Failed == 0 && status.SuccessState == CallbackPending {
+		unfinished, err := getUnfinished(ctx, b.Server, bid)
+		if err != nil {
+			util.Warnf("batch callbacks: %v", err)
+			return
+		}
+		if unfinished > 0 {
+			util.Debugf("batch %s has %d jobs still retrying, success callback waits", bid, unfinished)
+			return
+		}
 		// Complete must be enqueued (or not defined)
 		completeOk := status.CompleteState == CallbackEnqueued || status.CompleteState == CallbackFinished || !hasCompleteCallback(ctx, b.Server, bid)
 		if completeOk && successChildrenOk && !childFailures {

@@ -25,6 +25,13 @@ func getStatus(t *testing.T, cl *client.Client, bid string) client.BatchStatus {
 	return status
 }
 
+func unfinishedCount(t *testing.T, s *server.Server, bid string) int64 {
+	t.Helper()
+	n, err := s.Manager().Redis().Get(context.Background(), batchUnfinishedKey(bid)).Int64()
+	require.NoError(t, err)
+	return n
+}
+
 func batchSubsystem(t *testing.T, s *server.Server) *BatchSubsystem {
 	t.Helper()
 	for _, sub := range s.Subsystems {
@@ -58,6 +65,7 @@ func TestUniqRejectionRollsBackCounters(t *testing.T) {
 		status := getStatus(t, cl, bid)
 		assert.Equal(t, int64(1), status.Total, "rejected push should not count toward total")
 		assert.Equal(t, int64(1), status.Pending, "rejected push should not count toward pending")
+		assert.Equal(t, int64(1), unfinishedCount(t, s, bid), "rejected push should not count as unfinished")
 
 		_, err = cl.Generic("BATCH COMMIT " + bid)
 		require.NoError(t, err)
@@ -96,6 +104,7 @@ func TestExpiredBatchJobReleasesCount(t *testing.T) {
 		status := getStatus(t, cl, bid)
 		assert.Equal(t, int64(0), status.Pending, "expired job should no longer be pending")
 		assert.Equal(t, int64(1), status.Failed, "expired job never ran, so it counts as failed")
+		assert.Equal(t, int64(0), unfinishedCount(t, s, bid), "expired job is finished")
 
 		callback, err := cl.Fetch("callbacks")
 		require.NoError(t, err)
@@ -139,6 +148,7 @@ func TestDiscardedRetryOnlyCountsFailure(t *testing.T) {
 		status := getStatus(t, cl, bid)
 		assert.Equal(t, int64(0), status.Pending, "a discarded retry must not decrement pending again")
 		assert.Equal(t, int64(1), status.Failed, "a discarded retry is a terminal failure")
+		assert.Equal(t, int64(0), unfinishedCount(t, s, bid), "a discarded retry is finished")
 	})
 }
 
