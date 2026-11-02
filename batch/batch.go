@@ -30,6 +30,10 @@ const BatchTTL = 30 * time.Minute
 // finish (a leaked pending count, a member deleted by hand) are reaped.
 const CommittedBatchTTL = 30 * 24 * time.Hour
 
+// MaxReserveFor is the longest reserve_for, in seconds, that Faktory accepts
+// when a job is pushed.
+const MaxReserveFor = 86400
+
 // Callback state constants
 const (
 	CallbackPending  = ""  // Callback not yet enqueued
@@ -420,12 +424,9 @@ func setUncommitted(ctx context.Context, s *server.Server, bid string) error {
 	return nil
 }
 
-// deleteBatch removes all Redis keys associated with a batch
-func deleteBatch(ctx context.Context, s *server.Server, bid string) error {
-	rds := s.Manager().Redis()
-	pipe := rds.TxPipeline()
-
-	keys := []string{
+// batchKeys returns every Redis key that belongs to a batch.
+func batchKeys(bid string) []string {
+	return []string{
 		batchMetaKey(bid),
 		batchTotalKey(bid),
 		batchPendingKey(bid),
@@ -437,7 +438,14 @@ func deleteBatch(ctx context.Context, s *server.Server, bid string) error {
 		batchCompleteStateKey(bid) + ":lock",
 		batchSuccessStateKey(bid) + ":lock",
 	}
-	pipe.Del(ctx, keys...)
+}
+
+// deleteBatch removes all Redis keys associated with a batch
+func deleteBatch(ctx context.Context, s *server.Server, bid string) error {
+	rds := s.Manager().Redis()
+	pipe := rds.TxPipeline()
+
+	pipe.Del(ctx, batchKeys(bid)...)
 	pipe.SRem(ctx, batchCommittedSetKey(), bid)
 
 	_, err := pipe.Exec(ctx)
@@ -447,4 +455,36 @@ func deleteBatch(ctx context.Context, s *server.Server, bid string) error {
 
 	util.Debugf("Deleted batch %s", bid)
 	return nil
+}
+
+// reapBatchLua deletes a batch only if it is still committed with the commit
+// time the sweep judged stale. A BATCH OPEN, or a recommit, after the sweep read
+// the batch leaves it in place.
+// KEYS[1..10] = batch keys (see batchKeys), KEYS[11] = committed set
+// ARGV[1] = bid, ARGV[2] = committed_at as read, "" if it was missing
+var reapBatchLua = redis.NewScript(`
+	if redis.call("SISMEMBER", KEYS[11], ARGV[1]) == 0 then
+		return 0
+	end
+	local committed_at = redis.call("HGET", KEYS[1], "committed_at")
+	if committed_at == false then
+		committed_at = ""
+	end
+	if committed_at ~= ARGV[2] then
+		return 0
+	end
+	redis.call("DEL", unpack(KEYS, 1, 10))
+	redis.call("SREM", KEYS[11], ARGV[1])
+	return 1
+`)
+
+// reapBatch deletes a batch if it is still committed with the given
+// committed_at. It returns false, and leaves the batch, if it has changed.
+func reapBatch(ctx context.Context, s *server.Server, bid string, committedAt string) (bool, error) {
+	keys := append(batchKeys(bid), batchCommittedSetKey())
+	result, err := reapBatchLua.Run(ctx, s.Manager().Redis(), keys, bid, committedAt).Int()
+	if err != nil {
+		return false, fmt.Errorf("failed to reap batch %s: %w", bid, err)
+	}
+	return result == 1, nil
 }

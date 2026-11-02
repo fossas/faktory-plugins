@@ -125,8 +125,8 @@ The Faktory Enterprise Web UI includes a Batches tab where you can get a list of
 
 * A push that a later middleware rejects (e.g. `NOTUNIQUE` from the uniq plugin) is not counted in the batch.
 * A batch job that is discarded at fetch (e.g. by the expire plugin, once it is past `expires_at`) never runs, so it counts as a terminal failure: success will not fire, complete will.
-* Callback jobs keep the `retry`, `reserve_for` and `custom` fields from the callback definition.
-* A committed batch that still exists 30 days after `BATCH COMMIT` is deleted, along with its children, by the background sweep. This reaps batches that can no longer finish, e.g. because a member was deleted by hand.
+* Callback jobs keep the `retry`, `reserve_for` and `custom` fields from the callback definition. Like Faktory, `BATCH NEW` refuses a callback `reserve_for` over 86400 seconds (one day).
+* A committed batch that still exists 30 days after `BATCH COMMIT` is deleted, along with its children, by the background sweep. This reaps batches that can no longer finish, e.g. because a member was deleted by hand. The sweep waits until every batch in the tree is 30 days past its own commit, and skips a batch that is reopened or committed again while it runs.
 * ACKs and FAILs for a batch that has already been deleted are ignored.
 * A retrying job that is deleted or killed from the Web UI never ACKs or fails, so its batch's success callback waits until the sweep reaps the batch.
 * Batches created by a version of this plugin from before success waited for retries have no `unfinished` counter. They keep the old rule: success fires once every job has run once and none has died.

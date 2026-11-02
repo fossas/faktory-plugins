@@ -66,6 +66,15 @@ func (b *BatchSubsystem) batchNew(c *server.Connection, data string) {
 		return
 	}
 
+	// Faktory refuses to push a job reserved for longer, so the callback could
+	// never be enqueued.
+	for _, callback := range []*client.Job{batch.Success, batch.Complete} {
+		if callback != nil && callback.ReserveFor > MaxReserveFor {
+			_ = c.Error("BATCH NEW", fmt.Errorf("callbacks cannot be reserved for more than one day"))
+			return
+		}
+	}
+
 	// Generate BID
 	batch.Bid = generateBid()
 

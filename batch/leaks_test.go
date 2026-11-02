@@ -168,6 +168,59 @@ func TestCallbackCopiesReserveFor(t *testing.T) {
 	})
 }
 
+// Faktory refuses to push a job reserved for more than a day, so a callback
+// with a longer reservation could never be enqueued.
+func TestBatchNewRejectsCallbackReserveForOverOneDay(t *testing.T) {
+	withServer(func(s *server.Server, cl *client.Client) {
+		for _, def := range []string{
+			`{"success":{"jobtype":"SuccessCallback","reserve_for":86401}}`,
+			`{"complete":{"jobtype":"CompleteCallback","reserve_for":86401}}`,
+		} {
+			_, err := cl.Generic("BATCH NEW " + def)
+			assert.ErrorContains(t, err, "more than one day", def)
+		}
+
+		_, err := cl.Generic(`BATCH NEW {"success":{"jobtype":"SuccessCallback","reserve_for":86400}}`)
+		assert.NoError(t, err)
+	})
+}
+
+// A batch created before BATCH NEW checked reserve_for can still hold a value
+// Faktory refuses. Its callback is pushed with the default reservation instead.
+func TestCallbackDropsReserveForOverOneDay(t *testing.T) {
+	withServer(func(s *server.Server, cl *client.Client) {
+		ctx := context.Background()
+		result, err := cl.Generic(`BATCH NEW {"success":{"jobtype":"SuccessCallback","queue":"callbacks"}}`)
+		require.NoError(t, err)
+		bid := string(result)
+		require.NoError(t, s.Manager().Redis().HSet(ctx, batchMetaKey(bid), "success",
+			`{"jobtype":"SuccessCallback","queue":"callbacks","reserve_for":90000}`).Err())
+
+		_, err = cl.Generic("BATCH COMMIT " + bid)
+		require.NoError(t, err)
+
+		callback := waitForCallback(t, cl)
+		assert.Equal(t, "SuccessCallback", callback.Type)
+		assert.Equal(t, 0, callback.ReserveFor)
+	})
+}
+
+// newStuckBatch commits a batch whose only job is never fetched, standing in
+// for a batch with a leaked pending count.
+func newStuckBatch(t *testing.T, cl *client.Client, def string) string {
+	t.Helper()
+	result, err := cl.Generic("BATCH NEW " + def)
+	require.NoError(t, err)
+	bid := string(result)
+	job := client.NewJob("NeverRuns", bid)
+	job.Queue = "never"
+	job.SetCustom("bid", bid)
+	require.NoError(t, cl.Push(job))
+	_, err = cl.Generic("BATCH COMMIT " + bid)
+	require.NoError(t, err)
+	return bid
+}
+
 func TestSweepReapsStaleCommittedBatches(t *testing.T) {
 	withServer(func(s *server.Server, cl *client.Client) {
 		ctx := context.Background()
@@ -175,34 +228,19 @@ func TestSweepReapsStaleCommittedBatches(t *testing.T) {
 		b := batchSubsystem(t, s)
 		old := util.Thens(time.Now().Add(-31 * 24 * time.Hour))
 
-		// newStuckBatch commits a batch whose only job is never fetched,
-		// standing in for a batch with a leaked pending count.
-		newStuckBatch := func(def string) string {
-			result, err := cl.Generic("BATCH NEW " + def)
-			require.NoError(t, err)
-			bid := string(result)
-			job := client.NewJob("NeverRuns", bid)
-			job.Queue = "never"
-			job.SetCustom("bid", bid)
-			require.NoError(t, cl.Push(job))
-			_, err = cl.Generic("BATCH COMMIT " + bid)
-			require.NoError(t, err)
-			return bid
-		}
-
-		stale := newStuckBatch(`{"success":{"jobtype":"SuccessCallback"}}`)
+		stale := newStuckBatch(t, cl, `{"success":{"jobtype":"SuccessCallback"}}`)
 		require.NoError(t, rds.HSet(ctx, batchMetaKey(stale), "committed_at", old).Err())
 
 		// Batches committed before committed_at existed fall back to created_at.
-		legacy := newStuckBatch(`{"success":{"jobtype":"SuccessCallback"}}`)
+		legacy := newStuckBatch(t, cl, `{"success":{"jobtype":"SuccessCallback"}}`)
 		require.NoError(t, rds.HDel(ctx, batchMetaKey(legacy), "committed_at").Err())
 		require.NoError(t, rds.HSet(ctx, batchMetaKey(legacy), "created_at", old).Err())
 
-		fresh := newStuckBatch(`{"success":{"jobtype":"SuccessCallback"}}`)
+		fresh := newStuckBatch(t, cl, `{"success":{"jobtype":"SuccessCallback"}}`)
 
 		// A stale child is left for its parent's reap, which deletes the tree.
-		parent := newStuckBatch(`{"success":{"jobtype":"SuccessCallback"}}`)
-		child := newStuckBatch(`{"success":{"jobtype":"SuccessCallback"},"parent_bid":"` + parent + `"}`)
+		parent := newStuckBatch(t, cl, `{"success":{"jobtype":"SuccessCallback"}}`)
+		child := newStuckBatch(t, cl, `{"success":{"jobtype":"SuccessCallback"},"parent_bid":"`+parent+`"}`)
 		require.NoError(t, rds.HSet(ctx, batchMetaKey(child), "committed_at", old).Err())
 
 		task := &batchSweepTask{subsystem: b}
@@ -232,6 +270,93 @@ func TestSweepReapsStaleCommittedBatches(t *testing.T) {
 	})
 }
 
+// The sweep can read a batch from the committed set just before BATCH OPEN
+// removes it. BATCH OPEN leaves committed_at, so the stale read must not reap
+// the reopened batch.
+func TestSweepSkipsReopenedBatch(t *testing.T) {
+	withServer(func(s *server.Server, cl *client.Client) {
+		ctx := context.Background()
+		rds := s.Manager().Redis()
+		old := util.Thens(time.Now().Add(-31 * 24 * time.Hour))
+
+		bid := newStuckBatch(t, cl, `{"success":{"jobtype":"SuccessCallback"}}`)
+		require.NoError(t, rds.HSet(ctx, batchMetaKey(bid), "committed_at", old).Err())
+		_, err := cl.Generic("BATCH OPEN " + bid)
+		require.NoError(t, err)
+
+		task := &batchSweepTask{subsystem: batchSubsystem(t, s)}
+		assert.False(t, task.reapIfStale(ctx, bid, time.Now()), "a reopened batch must not be reaped")
+		exists, err := batchExists(ctx, s, bid)
+		require.NoError(t, err)
+		assert.True(t, exists)
+	})
+}
+
+// The sweep can read a batch's commit time just before it is reopened and
+// committed again. The reap must notice the new commit time and leave it.
+func TestReapBatchLeavesRecommittedBatch(t *testing.T) {
+	withServer(func(s *server.Server, cl *client.Client) {
+		ctx := context.Background()
+		rds := s.Manager().Redis()
+		old := util.Thens(time.Now().Add(-31 * 24 * time.Hour))
+
+		bid := newStuckBatch(t, cl, `{"success":{"jobtype":"SuccessCallback"}}`)
+		require.NoError(t, rds.HSet(ctx, batchMetaKey(bid), "committed_at", old).Err())
+
+		_, err := cl.Generic("BATCH OPEN " + bid)
+		require.NoError(t, err)
+		_, err = cl.Generic("BATCH COMMIT " + bid)
+		require.NoError(t, err)
+
+		reaped, err := reapBatch(ctx, s, bid, old)
+		require.NoError(t, err)
+		assert.False(t, reaped, "a recommitted batch must not be reaped")
+		exists, err := batchExists(ctx, s, bid)
+		require.NoError(t, err)
+		assert.True(t, exists)
+	})
+}
+
+// A stale parent can gain a child, or a grandchild, at any time before its
+// callbacks start. The sweep must not reap the tree while any batch in it is
+// still fresh.
+func TestSweepKeepsTreeWithFreshDescendant(t *testing.T) {
+	withServer(func(s *server.Server, cl *client.Client) {
+		ctx := context.Background()
+		rds := s.Manager().Redis()
+		old := util.Thens(time.Now().Add(-31 * 24 * time.Hour))
+		task := &batchSweepTask{subsystem: batchSubsystem(t, s)}
+
+		parent := newStuckBatch(t, cl, `{"success":{"jobtype":"SuccessCallback"}}`)
+		child := newStuckBatch(t, cl, `{"success":{"jobtype":"SuccessCallback"},"parent_bid":"`+parent+`"}`)
+		grandchild := newStuckBatch(t, cl, `{"success":{"jobtype":"SuccessCallback"},"parent_bid":"`+child+`"}`)
+		require.NoError(t, rds.HSet(ctx, batchMetaKey(parent), "committed_at", old).Err())
+
+		require.NoError(t, task.Execute(ctx))
+		for _, bid := range []string{parent, child, grandchild} {
+			exists, err := batchExists(ctx, s, bid)
+			require.NoError(t, err)
+			assert.True(t, exists, "a fresh child keeps batch %s", bid)
+		}
+
+		require.NoError(t, rds.HSet(ctx, batchMetaKey(child), "committed_at", old).Err())
+		require.NoError(t, task.Execute(ctx))
+		for _, bid := range []string{parent, child, grandchild} {
+			exists, err := batchExists(ctx, s, bid)
+			require.NoError(t, err)
+			assert.True(t, exists, "a fresh grandchild keeps batch %s", bid)
+		}
+
+		require.NoError(t, rds.HSet(ctx, batchMetaKey(grandchild), "committed_at", old).Err())
+		require.NoError(t, task.Execute(ctx))
+		for _, bid := range []string{parent, child, grandchild} {
+			exists, err := batchExists(ctx, s, bid)
+			require.NoError(t, err)
+			assert.False(t, exists, "batch %s should be reaped once the whole tree is stale", bid)
+		}
+	})
+}
+
 func TestAckAndFailDoNotRecreateDeletedBatch(t *testing.T) {
 	withServer(func(s *server.Server, cl *client.Client) {
 		ctx := context.Background()
@@ -240,7 +365,7 @@ func TestAckAndFailDoNotRecreateDeletedBatch(t *testing.T) {
 		batchKeys := func(bid string) []string {
 			return []string{
 				batchMetaKey(bid), batchTotalKey(bid), batchPendingKey(bid), batchFailedKey(bid),
-				batchCompleteStateKey(bid), batchSuccessStateKey(bid), batchChildrenKey(bid),
+				batchUnfinishedKey(bid), batchCompleteStateKey(bid), batchSuccessStateKey(bid), batchChildrenKey(bid),
 			}
 		}
 		assertNoKeys := func(t *testing.T, bid string) {

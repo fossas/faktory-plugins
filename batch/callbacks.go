@@ -161,6 +161,13 @@ func (b *BatchSubsystem) fireCallback(ctx context.Context, bid string, callbackT
 		CreatedAt:  util.Nows(),
 	}
 
+	// A batch created before BATCH NEW checked reserve_for can hold a value
+	// Faktory refuses to push. Use the default reservation instead.
+	if job.ReserveFor > MaxReserveFor {
+		util.Warnf("batch %s: %s callback reserve_for %d exceeds %d seconds, using the default", bid, callbackType, job.ReserveFor, MaxReserveFor)
+		job.ReserveFor = 0
+	}
+
 	// Ensure Args is set (Faktory requires it)
 	if job.Args == nil {
 		job.Args = []any{}
