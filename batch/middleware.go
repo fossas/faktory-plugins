@@ -12,9 +12,11 @@ import (
 )
 
 // pushToMatchLua atomically checks that callback states are both pending (""),
-// then increments total and pending counters. Returns 1 on success, 0 if
-// callbacks have already started.
-// KEYS[1] = complete_st, KEYS[2] = success_st, KEYS[3] = total, KEYS[4] = pending
+// then increments the total, pending and unfinished counters. unfinished is
+// only incremented if it exists (see adjustCountersLua). Returns 1 on success,
+// 0 if callbacks have already started.
+// KEYS[1] = complete_st, KEYS[2] = success_st, KEYS[3] = total, KEYS[4] = pending,
+// KEYS[5] = unfinished
 var pushToMatchLua = redis.NewScript(`
 	local complete_st = redis.call("GET", KEYS[1]) or ""
 	local success_st = redis.call("GET", KEYS[2]) or ""
@@ -23,6 +25,9 @@ var pushToMatchLua = redis.NewScript(`
 	end
 	redis.call("INCR", KEYS[3])
 	redis.call("INCR", KEYS[4])
+	if redis.call("EXISTS", KEYS[5]) == 1 then
+		redis.call("INCR", KEYS[5])
+	end
 	return 1
 `)
 
@@ -69,6 +74,7 @@ func (b *BatchSubsystem) pushMiddleware(ctx context.Context, next func() error) 
 			batchSuccessStateKey(bid),
 			batchTotalKey(bid),
 			batchPendingKey(bid),
+			batchUnfinishedKey(bid),
 		},
 	).Int64()
 	if err != nil {
@@ -84,7 +90,7 @@ func (b *BatchSubsystem) pushMiddleware(ctx context.Context, next func() error) 
 	// A later middleware (e.g. uniq's NOTUNIQUE) or the store can still reject
 	// the push. The job would then never ACK or FAIL, so undo the increment.
 	if err := next(); err != nil {
-		pending, rbErr := adjustCounters(ctx, b.Server, bid, -1, 0, -1)
+		pending, rbErr := adjustCounters(ctx, b.Server, bid, counterDeltas{pending: -1, total: -1, unfinished: -1})
 		if rbErr != nil {
 			util.Warnf("batch push middleware: failed to roll back counters for batch %s: %v", bid, rbErr)
 		} else if pending <= 0 {
@@ -129,7 +135,7 @@ func (b *BatchSubsystem) fetchMiddleware(ctx context.Context, next func() error)
 	if job.Failure == nil {
 		pendingDelta = -1
 	}
-	if _, adjErr := adjustCounters(ctx, b.Server, bid, pendingDelta, 1, 0); adjErr != nil {
+	if _, adjErr := adjustCounters(ctx, b.Server, bid, counterDeltas{pending: pendingDelta, failed: 1, unfinished: -1}); adjErr != nil {
 		util.Warnf("batch fetch middleware: failed to release discarded job %s from batch %s: %v", job.Jid, bid, adjErr)
 		return err
 	}
@@ -184,13 +190,14 @@ func (b *BatchSubsystem) ackMiddleware(ctx context.Context, next func() error) e
 		return nil
 	}
 
-	// Only decrement on first execution — if the job previously failed,
+	// Only decrement pending on first execution — if the job previously failed,
 	// pending was already decremented by failMiddleware on first failure.
+	// An ACK on any attempt finishes the job.
 	var pendingDelta int64
 	if job.Failure == nil {
 		pendingDelta = -1
 	}
-	pending, err := adjustCounters(ctx, b.Server, bid, pendingDelta, 0, 0)
+	pending, err := adjustCounters(ctx, b.Server, bid, counterDeltas{pending: pendingDelta, unfinished: -1})
 	if errors.Is(err, ErrBatchNotFound) {
 		util.Debugf("Job %s ACKed after its batch %s was deleted", job.Jid, bid)
 		return nil
@@ -272,7 +279,7 @@ func (b *BatchSubsystem) failMiddleware(ctx context.Context, next func() error) 
 		return nil
 	}
 
-	var pendingDelta, failedDelta int64
+	var pendingDelta, failedDelta, unfinishedDelta int64
 
 	// Decrement pending only on first execution
 	// (complete callback fires when all jobs have executed at least once)
@@ -281,13 +288,14 @@ func (b *BatchSubsystem) failMiddleware(ctx context.Context, next func() error) 
 		util.Debugf("Job %s in batch %s failed on first execution", job.Jid, bid)
 	}
 
-	// Increment failed only on terminal failure
+	// Increment failed, and finish the job, only on terminal failure
 	if isTerminalFailure {
 		failedDelta = 1
+		unfinishedDelta = -1
 		util.Debugf("Job %s in batch %s failed terminally", job.Jid, bid)
 	}
 
-	_, err = adjustCounters(ctx, b.Server, bid, pendingDelta, failedDelta, 0)
+	_, err = adjustCounters(ctx, b.Server, bid, counterDeltas{pending: pendingDelta, failed: failedDelta, unfinished: unfinishedDelta})
 	if errors.Is(err, ErrBatchNotFound) {
 		util.Debugf("Job %s FAILed after its batch %s was deleted", job.Jid, bid)
 		return nil

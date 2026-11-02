@@ -9,6 +9,8 @@ Faktory jobs execute concurrently, without any ordering guarantees or coordinati
 * **complete** means that all jobs in the batch have executed once, no matter if they were ACK'd or FAIL'd.
 * **success** means that all jobs executed and were ACK'd, i.e. no failures. If jobs repeatedly fail and don't retry or die, it's possible success will never fire.
 
+A job that fails and is retried counts toward complete after its first attempt, but holds success back until it is ACK'd. If it dies (runs out of retries) instead, success never fires. So with the default 25 retries, success can wait about three weeks for a job that keeps failing.
+
 ## Batch Commands
 
 All batch commands have the form `BATCH [subcommand]`.
@@ -123,9 +125,12 @@ The Faktory Enterprise Web UI includes a Batches tab where you can get a list of
 
 * A push that a later middleware rejects (e.g. `NOTUNIQUE` from the uniq plugin) is not counted in the batch.
 * A batch job that is discarded at fetch (e.g. by the expire plugin, once it is past `expires_at`) never runs, so it counts as a terminal failure: success will not fire, complete will.
-* Callback jobs keep the `retry`, `reserve_for` and `custom` fields from the callback definition.
-* A committed batch that still exists 30 days after `BATCH COMMIT` is deleted, along with its children, by the background sweep. This reaps batches that can no longer finish, e.g. because a member was deleted by hand.
+* Callback jobs keep the `retry`, `reserve_for` and `custom` fields from the callback definition. Like Faktory, `BATCH NEW` refuses a callback `reserve_for` over 86400 seconds (one day).
+* A committed batch that still exists 30 days after `BATCH COMMIT` is deleted, along with its children, by the background sweep. This reaps batches that can no longer finish, e.g. because a member was deleted by hand. The sweep waits until every batch in the tree is 30 days past its own commit, and skips a batch that is reopened or committed again while it runs.
 * ACKs and FAILs for a batch that has already been deleted are ignored.
+* A retrying job that is deleted or killed from the Web UI never ACKs or fails, so its batch's success callback waits until the sweep reaps the batch.
+* Batches created by a version of this plugin from before success waited for retries have no `unfinished` counter. They keep the old rule: success fires once every job has run once and none has died.
+* A version of this plugin from before the `unfinished` counter doesn't maintain it. After rolling back to such a version, delete the counters before rolling forward again, so the batches that ran in between fall back to the old rule. Faktory's Redis listens on `redis.sock` in its storage directory (`/var/lib/faktory/db` by default), so run this on the Faktory host: `redis-cli -s /var/lib/faktory/db/redis.sock --scan --pattern 'batch:*:unfinished' | xargs -r redis-cli -s /var/lib/faktory/db/redis.sock DEL`. Otherwise their counters are wrong, and their success callbacks may fire early or wait until the sweep reaps them.
 
 ## Side Note/Rant
 

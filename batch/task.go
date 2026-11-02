@@ -6,6 +6,7 @@ import (
 
 	"github.com/contribsys/faktory/server"
 	"github.com/contribsys/faktory/util"
+	"github.com/redis/go-redis/v9"
 )
 
 var _ server.Taskable = &batchSweepTask{}
@@ -51,47 +52,117 @@ func (t *batchSweepTask) Execute(ctx context.Context) error {
 	return nil
 }
 
-// reapIfStale deletes a batch, and its children, if it was committed more than
-// CommittedBatchTTL ago. Batches committed before committed_at was recorded
-// fall back to created_at. A child is left for its parent's reap, which
-// deletes the whole tree. Returns true if the batch was reaped.
+// staleBatch is a batch the sweep found stale, with the committed_at it read.
+type staleBatch struct {
+	bid         string
+	committedAt string
+}
+
+// reapIfStale deletes a batch, and its children, once every batch in the tree
+// was committed more than CommittedBatchTTL ago. Batches committed before
+// committed_at was recorded fall back to created_at. A child is left for its
+// parent's reap. Each batch is deleted only if it is still committed with the
+// commit time read here, so a batch reopened or recommitted in the meantime
+// stays. Returns true if the batch was reaped.
 func (t *batchSweepTask) reapIfStale(ctx context.Context, bid string, now time.Time) bool {
-	rds := t.subsystem.Server.Manager().Redis()
-	fields, err := rds.HMGet(ctx, batchMetaKey(bid), "committed_at", "created_at", "parent_bid").Result()
-	if err != nil {
+	s := t.subsystem.Server
+	parentBid, err := s.Manager().Redis().HGet(ctx, batchMetaKey(bid), "parent_bid").Result()
+	if err != nil && err != redis.Nil {
 		util.Warnf("Batch sweep: failed to read batch %s: %v", bid, err)
 		return false
 	}
-	committedAt, _ := fields[0].(string)
-	if committedAt == "" {
-		committedAt, _ = fields[1].(string)
-	}
-	if committedAt == "" {
-		return false
-	}
-	committed, err := util.ParseTime(committedAt)
-	if err != nil {
-		util.Warnf("Batch sweep: invalid commit time %q for batch %s: %v", committedAt, bid, err)
-		return false
-	}
-	if now.Sub(committed) < CommittedBatchTTL {
-		return false
-	}
-
-	if parentBid, _ := fields[2].(string); parentBid != "" {
-		parentExists, err := batchExists(ctx, t.subsystem.Server, parentBid)
+	if parentBid != "" {
+		parentExists, err := batchExists(ctx, s, parentBid)
 		if err != nil || parentExists {
 			return false
 		}
 	}
 
-	status, err := getBatchStatus(ctx, t.subsystem.Server, bid)
+	tree, ok := t.staleTree(ctx, bid, now)
+	if !ok {
+		return false
+	}
+
+	status, err := getBatchStatus(ctx, s, bid)
 	if err == nil {
 		util.Warnf("Batch sweep: reaping batch %s committed at %s (total=%d pending=%d failed=%d complete_st=%q success_st=%q)",
-			bid, committedAt, status.Total, status.Pending, status.Failed, status.CompleteState, status.SuccessState)
+			bid, tree[0].committedAt, status.Total, status.Pending, status.Failed, status.CompleteState, status.SuccessState)
 	}
-	t.subsystem.deleteBatchTree(ctx, bid)
+
+	// The root goes first: if it changed since it was read, the tree stays.
+	// A child that changed stays too, and is reaped on its own once stale,
+	// since its parent is gone.
+	for i, batch := range tree {
+		reaped, err := reapBatch(ctx, s, batch.bid, batch.committedAt)
+		if err != nil {
+			util.Warnf("Batch sweep: %v", err)
+		}
+		if i == 0 && !reaped {
+			return false
+		}
+	}
 	return true
+}
+
+// staleTree returns bid and its descendants, root first, if every one of them
+// is committed and stale. A child whose keys are gone is skipped. It returns
+// false if any batch in the tree is uncommitted or fresh, or cannot be read.
+func (t *batchSweepTask) staleTree(ctx context.Context, bid string, now time.Time) ([]staleBatch, bool) {
+	s := t.subsystem.Server
+	rds := s.Manager().Redis()
+
+	committed, err := rds.SIsMember(ctx, batchCommittedSetKey(), bid).Result()
+	if err != nil {
+		util.Warnf("Batch sweep: failed to check whether batch %s is committed: %v", bid, err)
+		return nil, false
+	}
+	if !committed {
+		return nil, false
+	}
+
+	fields, err := rds.HMGet(ctx, batchMetaKey(bid), "committed_at", "created_at").Result()
+	if err != nil {
+		util.Warnf("Batch sweep: failed to read batch %s: %v", bid, err)
+		return nil, false
+	}
+	committedAt, _ := fields[0].(string)
+	commitTime := committedAt
+	if commitTime == "" {
+		commitTime, _ = fields[1].(string)
+	}
+	if commitTime == "" {
+		return nil, false
+	}
+	parsed, err := util.ParseTime(commitTime)
+	if err != nil {
+		util.Warnf("Batch sweep: invalid commit time %q for batch %s: %v", commitTime, bid, err)
+		return nil, false
+	}
+	if now.Sub(parsed) < CommittedBatchTTL {
+		return nil, false
+	}
+
+	tree := []staleBatch{{bid: bid, committedAt: committedAt}}
+	children, err := getChildBatches(ctx, s, bid)
+	if err != nil {
+		util.Warnf("Batch sweep: failed to read children of batch %s: %v", bid, err)
+		return nil, false
+	}
+	for _, child := range children {
+		exists, err := batchExists(ctx, s, child)
+		if err != nil {
+			return nil, false
+		}
+		if !exists {
+			continue
+		}
+		subtree, ok := t.staleTree(ctx, child, now)
+		if !ok {
+			return nil, false
+		}
+		tree = append(tree, subtree...)
+	}
+	return tree, true
 }
 
 // Stats returns statistics about the task

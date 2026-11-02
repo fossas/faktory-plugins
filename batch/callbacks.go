@@ -57,8 +57,18 @@ func (b *BatchSubsystem) checkAndFireCallbacks(ctx context.Context, bid string) 
 	}
 
 	// Check success callback
-	// Fires when: pending == 0 AND failed == 0 AND no child failures AND complete callback enqueued (or not defined) AND all children's success callbacks finished
+	// Fires when: pending == 0 AND failed == 0 AND unfinished == 0 (every job ACKed, none still retrying)
+	// AND no child failures AND complete callback enqueued (or not defined) AND all children's success callbacks finished
 	if status.Failed == 0 && status.SuccessState == CallbackPending {
+		unfinished, err := getUnfinished(ctx, b.Server, bid)
+		if err != nil {
+			util.Warnf("batch callbacks: %v", err)
+			return
+		}
+		if unfinished > 0 {
+			util.Debugf("batch %s has %d jobs still retrying, success callback waits", bid, unfinished)
+			return
+		}
 		// Complete must be enqueued (or not defined)
 		completeOk := status.CompleteState == CallbackEnqueued || status.CompleteState == CallbackFinished || !hasCompleteCallback(ctx, b.Server, bid)
 		if completeOk && successChildrenOk && !childFailures {
@@ -149,6 +159,13 @@ func (b *BatchSubsystem) fireCallback(ctx context.Context, bid string, callbackT
 		Retry:      callbackJob.Retry,
 		ReserveFor: callbackJob.ReserveFor,
 		CreatedAt:  util.Nows(),
+	}
+
+	// A batch created before BATCH NEW checked reserve_for can hold a value
+	// Faktory refuses to push. Use the default reservation instead.
+	if job.ReserveFor > MaxReserveFor {
+		util.Warnf("batch %s: %s callback reserve_for %d exceeds %d seconds, using the default", bid, callbackType, job.ReserveFor, MaxReserveFor)
+		job.ReserveFor = 0
 	}
 
 	// Ensure Args is set (Faktory requires it)
