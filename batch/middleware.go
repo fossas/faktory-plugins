@@ -12,9 +12,8 @@ import (
 )
 
 // pushToMatchLua atomically checks that callback states are both pending (""),
-// then increments the total, pending and unfinished counters. unfinished is
-// only incremented if it exists (see adjustCountersLua). Returns 1 on success,
-// 0 if callbacks have already started.
+// then increments the total, pending and unfinished counters. Returns 1 on
+// success, 0 if callbacks have already started.
 // KEYS[1] = complete_st, KEYS[2] = success_st, KEYS[3] = total, KEYS[4] = pending,
 // KEYS[5] = unfinished
 var pushToMatchLua = redis.NewScript(`
@@ -25,9 +24,7 @@ var pushToMatchLua = redis.NewScript(`
 	end
 	redis.call("INCR", KEYS[3])
 	redis.call("INCR", KEYS[4])
-	if redis.call("EXISTS", KEYS[5]) == 1 then
-		redis.call("INCR", KEYS[5])
-	end
+	redis.call("INCR", KEYS[5])
 	return 1
 `)
 
