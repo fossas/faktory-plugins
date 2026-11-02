@@ -52,6 +52,8 @@ func main() {
 	s.Register(webui.Subsystem(opts.WebBinding))
 
 	// fossa plugins
+	// Middleware runs in registration order. batch must come before uniq and expire:
+	// it undoes its counters when uniq rejects a push or expire discards a fetched job.
 	s.Register(new(batch.BatchSubsystem))
 	s.Register(new(uniq.UniqSubsystem))
 	s.Register(new(metrics.MetricsSubsystem))

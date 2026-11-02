@@ -119,6 +119,14 @@ The Faktory Enterprise Web UI includes a Batches tab where you can get a list of
 * The callback for a parent batch will not enqueue until the callback for the child batch has finished.
 * The success callback for a batch will always enqueue after the complete callback.
 
+## Interaction with other plugins and expiry
+
+* A push that a later middleware rejects (e.g. `NOTUNIQUE` from the uniq plugin) is not counted in the batch.
+* A batch job that is discarded at fetch (e.g. by the expire plugin, once it is past `expires_at`) never runs, so it counts as a terminal failure: success will not fire, complete will.
+* Callback jobs keep the `retry`, `reserve_for` and `custom` fields from the callback definition.
+* A committed batch that still exists 30 days after `BATCH COMMIT` is deleted, along with its children, by the background sweep. This reaps batches that can no longer finish, e.g. because a member was deleted by hand.
+* ACKs and FAILs for a batch that has already been deleted are ignored.
+
 ## Side Note/Rant
 
 There are many "enterprise" tools which provide visual "workflow" builder tools which market themselves as an easy way to build and manage business processes with the drag of a box. This is a fool's errand. These tools are inevitably sold to a CIO/CTO for millions of dollars. The affected teams try them, realize they don't handle the complexities/realities of business well and discard them to a shelf somewhere. I know this because I helped build one of these "magical" $$$$$ tools at IBM long ago. Today the OSS world is building those same types of tools and making the same mistakes.
